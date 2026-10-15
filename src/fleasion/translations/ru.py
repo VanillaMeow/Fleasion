@@ -675,6 +675,10 @@ RUSSIAN: dict[str, str] = {
     'proxy.table.status': 'Состояние',
     'proxy.table.time': 'Время',
     'proxy.tunnel_note': 'Предпросмотр недоступен — это соединение было туннелировано (непрозрачный TLS), а не расшифровано.',
+    'proxy.gamejoin_disabled': (
+        'Функции Gamejoin отключены после обновления Roblox. Fleasion '
+        'больше не перехватывает запросы Gamejoin.'
+    ),
     'proxy_gate.disabled_message': 'Этот раздел закрыт, поскольку прокси отключён в настройках.',
     'rando.account.add_title': 'Добавить учётную запись',
     'rando.account.change_cookie_title': 'Изменить cookie',

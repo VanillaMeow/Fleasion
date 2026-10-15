@@ -675,6 +675,10 @@ KAZAKH: dict[str, str] = {
     'proxy.table.status': 'Күйі',
     'proxy.table.time': 'Уақыт',
     'proxy.tunnel_note': 'Алдын ала қарау қолжетімсіз — бұл қосылым шифры шешілмей, туннельденді (мөлдір емес TLS).',
+    'proxy.gamejoin_disabled': (
+        'Roblox жаңартуынан кейін Gamejoin мүмкіндіктері өшірілді. '
+        'Fleasion енді Gamejoin сұрауларын ұстамайды.'
+    ),
     'proxy_gate.disabled_message': 'Бұл бөлім жабық, себебі прокси Баптауларда өшірілген.',
     'rando.account.add_title': 'Тіркелгі қосу',
     'rando.account.change_cookie_title': 'Cookie өзгерту',

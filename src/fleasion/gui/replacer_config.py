@@ -769,28 +769,15 @@ class ReplacerConfigWindow(QDialog):
         )
         self._registered_module_interceptors = []
 
-        # Create Subplace Joiner tab
-        from .subplace_joiner_tab import SubplaceJoinerTab
-
-        self._subplace_tab = SubplaceJoinerTab(
-            rando_tab=self._rando_stuff_tab,
-            config_manager=self.config_manager,
-            proxy_master=self.proxy_master,
+        # Keep the unavailable joiner visible without constructing or registering it
+        subplace_page = QWidget(self.tab_widget)
+        subplace_index = self.tab_widget.addTab(
+            subplace_page, tr('ui.gui.replacer_config.subplace_joiner')
         )
-        self._rando_stuff_tab.selected_account_changed.connect(
-            self._subplace_tab.set_selected_account
-        )
-        self.tab_widget.addTab(
-            self._proxy_required(self._subplace_tab), tr('ui.gui.replacer_config.subplace_joiner')
-        )
-        if self.proxy_master is not None:
-            self.proxy_master.register_module_interceptor(self._subplace_tab)
-            self._registered_module_interceptors.append(self._subplace_tab)
-
+        gamejoin_enabled = False
+        self.tab_widget.setTabEnabled(subplace_index, gamejoin_enabled)
+        self.tab_widget.setTabToolTip(subplace_index, tr('proxy.gamejoin_disabled'))
         self.tab_widget.addTab(self._rando_stuff_tab, tr('ui.gui.replacer_config.miscellaneous'))
-        if self.proxy_master is not None:
-            self.proxy_master.register_module_interceptor(self._rando_stuff_tab)
-            self._registered_module_interceptors.append(self._rando_stuff_tab)
 
         # Create Proxy tab
         from .proxy_tab import ProxyTrafficTab

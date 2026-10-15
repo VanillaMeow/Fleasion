@@ -17,7 +17,6 @@ INTERCEPTED_HOSTS = (
     'assetdelivery.roblox.com',
     'fts.rbxcdn.com',
     'contentdelivery.roblox.com',
-    'gamejoin.roblox.com',
     'apis.roblox.com',
 )
 

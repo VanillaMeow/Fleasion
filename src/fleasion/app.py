@@ -2269,7 +2269,6 @@ def _linux_hosts_nix_snippet(details: dict) -> str:
         'assetdelivery.roblox.com',
         'contentdelivery.roblox.com',
         'fts.rbxcdn.com',
-        'gamejoin.roblox.com',
     )
     hosts = sorted({str(host).strip().lower() for host in raw_hosts if str(host).strip()})
     if not hosts:
@@ -2278,7 +2277,6 @@ def _linux_hosts_nix_snippet(details: dict) -> str:
             'assetdelivery.roblox.com',
             'contentdelivery.roblox.com',
             'fts.rbxcdn.com',
-            'gamejoin.roblox.com',
         ]
 
     extra_hosts = '\n'.join(f'  127.0.0.1 {host}' for host in hosts)

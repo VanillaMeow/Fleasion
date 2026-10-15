@@ -48,12 +48,12 @@ def test_source_helper_remains_compatible_with_pre_314_python_syntax():
 def test_helper_only_manages_allowlisted_fleasion_hosts(tmp_path, monkeypatch):
     hosts_file, _ = _reset_daemon_state(tmp_path, monkeypatch)
 
-    daemon._set_hosts({"assetdelivery.roblox.com", "gamejoin.roblox.com"})
+    daemon._set_hosts({"assetdelivery.roblox.com", "contentdelivery.roblox.com"})
     content = hosts_file.read_text(encoding="utf-8")
 
     assert "10.0.0.1 custom.example" in content
     assert "127.0.0.1 assetdelivery.roblox.com # Fleasion proxy entry" in content
-    assert "127.0.0.1 gamejoin.roblox.com # Fleasion proxy entry" in content
+    assert "127.0.0.1 contentdelivery.roblox.com # Fleasion proxy entry" in content
 
     daemon._set_hosts([])
     cleaned = hosts_file.read_text(encoding="utf-8")

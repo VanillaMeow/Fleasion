@@ -25,7 +25,7 @@ import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-HELPER_VERSION = 7
+HELPER_VERSION = 8
 HELPER_CAPABILITIES = ('hosts', 'relay', 'patch_ca', 'probe_backend')
 HOSTS_FILE = '/etc/hosts'
 HOSTS_MARKER = '# Fleasion proxy entry'
@@ -36,8 +36,9 @@ ALLOWED_HOSTS = {
     'clientsettings.roblox.com',
     'clientsettingscdn.roblox.com',
     'fts.rbxcdn.com',
-    'gamejoin.roblox.com',
 }
+# Retain legacy gamejoin redirects as cleanup targets only
+_HOSTS_CLEANUP_HOSTS = ALLOWED_HOSTS | {'gamejoin.roblox.com'}
 LEASE_SECONDS = 20.0
 _PEM_CERT_BLOCK_RE = re.compile(
     r'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----\s*',
@@ -91,9 +92,9 @@ def _read_token():
 def _line_targets_allowed_host(raw_line):
     active = raw_line.split('#', 1)[0].strip()
     parts = active.split()
-    if len(parts) < 2 or parts[0] != '127.0.0.1':
+    if len(parts) < 2 or parts[0] not in {'127.0.0.1', '::1'}:
         return False
-    return any(host.lower() in ALLOWED_HOSTS for host in parts[1:])
+    return any(host.lower() in _HOSTS_CLEANUP_HOSTS for host in parts[1:])
 
 
 def _parse_entries(content):

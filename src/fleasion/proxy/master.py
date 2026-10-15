@@ -121,6 +121,8 @@ else:
         Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32' / 'drivers' / 'etc' / 'hosts'
     )
     _PLATFORM_TEMP_DIR = Path(os.environ.get('TEMP', r'C:\Windows\Temp'))
+# Include the retired route when cleaning redirects left by older versions
+_HOSTS_CLEANUP_HOSTS: frozenset[str] = INTERCEPT_HOSTS | {GAMEJOIN_HOST}
 _HOSTS_MARKER = '# Fleasion proxy entry'
 _HOSTS_FILE_REPAIR_THRESHOLD_BYTES = 512 * 1024
 SOBER_CUSTOM_FFLAG_ROUTE_ARM_DELAY_SECONDS = 30.0
@@ -1267,7 +1269,7 @@ def _schedule_hosts_cleanup_on_reboot() -> None:
             line
             for line in original.splitlines(keepends=True)
             if _HOSTS_MARKER not in line
-            and not _hosts_line_has_target_loopback(line, set(INTERCEPT_HOSTS))
+            and not _hosts_line_has_target_loopback(line, set(_HOSTS_CLEANUP_HOSTS))
         )
         _TEMP_CLEAN_HOSTS.write_text(clean_content, encoding='utf-8')
 
@@ -1843,7 +1845,7 @@ def has_stale_hosts_entries(hosts: Set[str] | None = None) -> bool:
     """Return whether Fleasion-owned hosts entries need privileged cleanup."""
     if hosts_file_is_oversized():
         return True
-    target_hosts = set(hosts or INTERCEPT_HOSTS)
+    target_hosts = set(hosts or _HOSTS_CLEANUP_HOSTS) | {GAMEJOIN_HOST}
     try:
         existing = HOSTS_FILE.read_text(encoding='utf-8', errors='replace')
     except OSError:
@@ -1990,7 +1992,7 @@ def repair_hosts_file(
     intact. The original file is renamed to a timestamped backup before the
     repaired file is atomically installed.
     """
-    target_hosts = set(hosts or INTERCEPT_HOSTS)
+    target_hosts = set(hosts or _HOSTS_CLEANUP_HOSTS) | {GAMEJOIN_HOST}
     size = hosts_file_size()
     if size is None:
         _record_hosts_error(error_details, 'Could not stat the hosts file before repair.')
@@ -2428,6 +2430,7 @@ def _remove_hosts_entries(hosts: Set[str], error_details: Optional[dict] = None)
     absent).  Returns False if the write failed — callers must NOT cancel the
     reboot guard in that case, so the next boot still cleans up automatically.
     """
+    hosts = {GAMEJOIN_HOST, *hosts}
     if IS_MACOS and not _is_admin():
         from ..utils.macos_proxy_helper import helper_clear_hosts
 
@@ -4355,7 +4358,11 @@ class ProxyMaster:
         if entry is None:
             return False
         host = entry.get('host')
-        if not host:
+        if (
+            not isinstance(host, str)
+            or not host
+            or host.strip().lower().rstrip('.') == GAMEJOIN_HOST
+        ):
             return False
         if edited_text is not None:
             from .server import rebuild_edited_message
@@ -4380,7 +4387,7 @@ class ProxyMaster:
         return self.config_manager.wire_preserving_passthrough
 
     def register_module_interceptor(self, module) -> None:
-        """Register a module whose request()/response() methods are called for gamejoin traffic."""
+        """Register a module whose request()/response() methods are called for profile traffic."""
         with self._lock:
             if module not in self._module_interceptors:
                 self._module_interceptors.append(module)
@@ -4389,7 +4396,7 @@ class ProxyMaster:
             self._proxy.set_module_interceptors(interceptors)
 
     def unregister_module_interceptor(self, module) -> None:
-        """Unregister a gamejoin traffic interceptor when its owning UI is destroyed."""
+        """Unregister a profile traffic interceptor when its owning UI is destroyed."""
         with self._lock:
             before = len(self._module_interceptors)
             self._module_interceptors = [
@@ -4407,11 +4414,11 @@ class ProxyMaster:
         if self._proxy_debug_enabled():
             mode = self._proxy_debug_mode()
             if mode == 'a':
-                hosts = {GAMEJOIN_HOST}
+                hosts: set[str] = set()
             elif mode == 'b':
-                hosts = {GAMEJOIN_HOST, ASSET_DELIVERY_HOST}
+                hosts = {ASSET_DELIVERY_HOST}
             elif mode == 'c':
-                hosts = {GAMEJOIN_HOST, ASSET_DELIVERY_HOST, *CDN_HOSTS}
+                hosts = {ASSET_DELIVERY_HOST, *CDN_HOSTS}
             else:
                 hosts = set(BASE_INTERCEPT_HOSTS)
         else:
@@ -4828,7 +4835,7 @@ class ProxyMaster:
                 self.cache_scraper.set_real_ips(scraper_ips)
             return
         # Remove entries temporarily so getaddrinfo() sees real IPs again.
-        _remove_hosts_entries(set(INTERCEPT_HOSTS))
+        _remove_hosts_entries(set(_HOSTS_CLEANUP_HOSTS))
         _flush_dns()
         new_endpoints = _resolve_real_endpoints(active_hosts)
         _log_upstream_ip_coverage(active_hosts, new_endpoints)
@@ -5335,7 +5342,7 @@ class ProxyMaster:
                 else:
                     cleanup_details: dict = {}
                     hosts_cleaned = _remove_hosts_entries(
-                        set(INTERCEPT_HOSTS), error_details=cleanup_details
+                        set(_HOSTS_CLEANUP_HOSTS), error_details=cleanup_details
                     )
                     if not hosts_cleaned:
                         log_buffer.log(
@@ -5555,7 +5562,7 @@ class ProxyMaster:
                     self._emit_proxy_start_error('hosts_file_too_large', oversized_hosts_details)
                     self._running = False
                     return
-                if has_stale_hosts_entries(set(INTERCEPT_HOSTS)):
+                if has_stale_hosts_entries(set(_HOSTS_CLEANUP_HOSTS)):
                     log_buffer.log(
                         'Error',
                         'Stale proxy hosts entries still exist while starting Roblox Env Proxy '
@@ -5581,7 +5588,7 @@ class ProxyMaster:
             # connections would fail with WinError 1225.
             stale_hosts_error_details: dict = {}
             if not _remove_hosts_entries(
-                set(INTERCEPT_HOSTS), error_details=stale_hosts_error_details
+                set(_HOSTS_CLEANUP_HOSTS), error_details=stale_hosts_error_details
             ):
                 log_buffer.log(
                     'Error',
@@ -6117,7 +6124,7 @@ class ProxyMaster:
             else:
                 rollback_details: dict = {}
                 if not _remove_hosts_entries(
-                    set(INTERCEPT_HOSTS), error_details=rollback_details
+                    set(_HOSTS_CLEANUP_HOSTS), error_details=rollback_details
                 ):
                     log_buffer.log(
                         'Error',
@@ -6183,7 +6190,7 @@ class ProxyMaster:
                 self._stop_watchdog()
                 cleanup_details: dict = {}
                 hosts_cleaned = _remove_hosts_entries(
-                    set(INTERCEPT_HOSTS), error_details=cleanup_details
+                    set(_HOSTS_CLEANUP_HOSTS), error_details=cleanup_details
                 )
                 if not hosts_cleaned:
                     log_buffer.log(

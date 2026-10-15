@@ -363,15 +363,20 @@ def test_read_hosts_update_rejects_non_allowlisted_hosts(tmp_path):
 
 def test_read_hosts_update_accepts_allowlisted_hosts(tmp_path):
     hosts_file = tmp_path / 'hosts.json'
-    hosts_file.write_text('{"hosts":["apis.roblox.com","gamejoin.roblox.com"]}', encoding='utf-8')
+    hosts_file.write_text(
+        '{"hosts":["apis.roblox.com","contentdelivery.roblox.com"]}', encoding='utf-8'
+    )
 
-    assert daemon._read_hosts_update(hosts_file) == {'apis.roblox.com', 'gamejoin.roblox.com'}
+    assert daemon._read_hosts_update(hosts_file) == {
+        'apis.roblox.com',
+        'contentdelivery.roblox.com',
+    }
 
 
 def test_apply_hosts_continues_when_read_only_hosts_already_has_entries(tmp_path, monkeypatch):
     hosts_file = tmp_path / 'hosts'
     hosts_file.write_text(
-        '127.0.0.1 assetdelivery.roblox.com\n127.0.0.1 gamejoin.roblox.com\n',
+        '127.0.0.1 assetdelivery.roblox.com\n127.0.0.1 contentdelivery.roblox.com\n',
         encoding='utf-8',
     )
 
@@ -387,7 +392,7 @@ def test_apply_hosts_continues_when_read_only_hosts_already_has_entries(tmp_path
         daemon._apply_hosts_or_use_existing_read_only(
             {
                 'assetdelivery.roblox.com',
-                'gamejoin.roblox.com',
+                'contentdelivery.roblox.com',
             }
         )
         is True
@@ -410,7 +415,7 @@ def test_apply_hosts_raises_when_read_only_hosts_is_missing_entries(tmp_path, mo
         daemon._apply_hosts_or_use_existing_read_only(
             {
                 'assetdelivery.roblox.com',
-                'gamejoin.roblox.com',
+                'contentdelivery.roblox.com',
             }
         )
     except OSError as exc:

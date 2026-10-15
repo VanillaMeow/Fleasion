@@ -675,6 +675,10 @@ FRENCH: dict[str, str] = {
     'proxy.table.status': 'Statut',
     'proxy.table.time': 'Temps',
     'proxy.tunnel_note': 'Aucun aperçu disponible - cette connexion a été tunnelisée (TLS opaque), pas déchiffrée.',
+    'proxy.gamejoin_disabled': (
+        'Les fonctions Gamejoin sont désactivées après une mise à jour de '
+        'Roblox. Fleasion ne capture plus les requêtes Gamejoin.'
+    ),
     'proxy_gate.disabled_message': 'Cette section est fermée car le proxy est désactivé dans Paramètres.',
     'rando.account.add_title': 'Ajouter un compte',
     'rando.account.change_cookie_title': 'Modifier le cookie',

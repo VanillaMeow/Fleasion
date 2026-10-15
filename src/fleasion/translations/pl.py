@@ -675,6 +675,10 @@ POLISH: dict[str, str] = {
     'proxy.table.status': 'Stan',
     'proxy.table.time': 'Czas',
     'proxy.tunnel_note': 'Brak dostępnego podglądu — to połączenie zostało tunelowane (nieprzezroczyste TLS), a nie odszyfrowane.',
+    'proxy.gamejoin_disabled': (
+        'Funkcje Gamejoin zostały wyłączone po aktualizacji Roblox. '
+        'Fleasion nie przechwytuje już żądań Gamejoin.'
+    ),
     'proxy_gate.disabled_message': 'Ta sekcja jest zamknięta, ponieważ serwer proxy jest wyłączony w Ustawieniach.',
     'rando.account.add_title': 'Dodaj konto',
     'rando.account.change_cookie_title': 'Zmień plik cookie',
