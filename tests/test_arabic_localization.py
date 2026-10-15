@@ -20,7 +20,6 @@ from fleasion.translations.en import ENGLISH
 def test_arabic_catalog_is_complete_and_preserves_markup() -> None:
     """Every source string has a manually authored Arabic counterpart."""
     assert list(ARABIC) == list(ENGLISH)
-    assert len(ARABIC) == 1904
 
     for key, english in ENGLISH.items():
         arabic = ARABIC[key]
@@ -39,9 +38,10 @@ def test_arabic_text_and_technical_literals_are_distinguished() -> None:
     assert ARABIC['ui.gui.settings_tab.proxy_mode'] == 'وضع الوكيل'
     assert ARABIC['ui.cache.animation_viewer.text'] == '?'
     assert ARABIC['font_viewer.sample.symbols'] == ENGLISH['font_viewer.sample.symbols']
-    assert ARABIC['ui.gui.modifications_tab.content_sounds_oof_ogg'] == ENGLISH[
-        'ui.gui.modifications_tab.content_sounds_oof_ogg'
-    ]
+    assert (
+        ARABIC['ui.gui.modifications_tab.content_sounds_oof_ogg']
+        == ENGLISH['ui.gui.modifications_tab.content_sounds_oof_ogg']
+    )
     assert any('\u0627' <= c <= '\u064a' for c in ARABIC['font_viewer.sample.lowercase'])
     assert ARABIC['ui.gui.modifications_tab.false'] == 'غير صحيح'
     assert ARABIC['asset_filter.type.38'] == 'مكوّن إضافي'

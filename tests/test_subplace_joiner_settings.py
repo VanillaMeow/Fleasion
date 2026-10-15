@@ -186,7 +186,7 @@ def test_subplace_get_verifies_intercepted_api_host_with_local_ca(
     assert captured['verify'] == str(ca_cert)
 
 
-def test_subplace_join_root_verifies_intercepted_gamejoin_with_local_ca(
+def test_disabled_subplace_join_root_never_sends_gamejoin_requests(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ca_dir = tmp_path / 'proxy_ca'
@@ -203,9 +203,8 @@ def test_subplace_join_root_verifies_intercepted_gamejoin_with_local_ca(
     session = _SessionStub()
     owner.install_session(session)
 
-    assert owner.join_root(12345, 'cookie')
-    assert session.url == 'https://gamejoin.roblox.com/v1/join-game'
-    assert session.verify == str(ca_cert)
+    assert not owner.join_root(12345, 'cookie')
+    assert not session.url
 
 
 def test_subplace_settings_save_uses_user_owned_config_root(

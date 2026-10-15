@@ -1,28 +1,18 @@
-"""UsernameSpoofer: rewrites Roblox profile and gamejoin creator metadata."""
+"""UsernameSpoofer: rewrites Roblox profile metadata."""
 
 from __future__ import annotations
 
-import importlib
 import json
 import threading
-from typing import TYPE_CHECKING, Protocol, TypedDict, cast
-
-import requests
+from typing import TYPE_CHECKING, Protocol, TypedDict
 
 from fleasion.utils import log_buffer
-from fleasion.utils.json_types import JsonObject, JsonValue, as_json_object
+from fleasion.utils.json_types import JsonObject, as_json_object
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from fleasion.proxy.server import ProxyFlow
 
 PROFILE_ENDPOINT_FRAGMENT = '/v1/user/profiles/get-profiles'
-GAMEJOIN_ENDPOINT_FRAGMENTS = (
-    '/v1/join-game',
-    '/v1/join-game-instance',
-    '/v1/join-reserved-game',
-)
 EMPTY_NAME_SENTINEL = '\u200b'
 NAME_KEYS = (
     'username',
@@ -33,31 +23,6 @@ NAME_KEYS = (
     'platformName',
     'alias',
 )
-_ROBLOSECURITY_GETTER_ATTR = 'get_roblosecurity'
-
-
-def _get_roblosecurity() -> str | None:
-    module = importlib.import_module('fleasion.utils.roblox_auth')
-    getter = cast(
-        'Callable[[], str | None]',
-        getattr(module, _ROBLOSECURITY_GETTER_ATTR),
-    )
-    return getter()
-
-
-def _authenticated_user_id(cookie: str) -> int | None:
-    session = requests.Session()
-    session.trust_env = False
-    session.proxies = {}
-    try:
-        session.cookies.set('.ROBLOSECURITY', cookie)
-    except TypeError, ValueError:
-        session.headers['Cookie'] = f'.ROBLOSECURITY={cookie};'
-    response = session.get('https://users.roblox.com/v1/users/authenticated', timeout=10)
-    if response.status_code != 200:
-        return None
-    user_id = response.json().get('id')
-    return int(user_id) if user_id is not None else None
 
 
 class _SpooferState(TypedDict):
@@ -131,7 +96,7 @@ class UsernameSpoofer:
             'self_name': str(state.get('self_name', base['self_name'])),
             'self_apply_ingame': bool(state.get('self_apply_ingame', base['self_apply_ingame'])),
             'self_verified': bool(state.get('self_verified', base['self_verified'])),
-            'self_game_creator': bool(state.get('self_game_creator', base['self_game_creator'])),
+            'self_game_creator': False,
         }
 
     @staticmethod
@@ -141,7 +106,6 @@ class UsernameSpoofer:
             or state.get('others_verified')
             or state.get('self_apply_ingame')
             or state.get('self_verified')
-            or state.get('self_game_creator')
         )
 
     def is_enabled(self) -> bool:
@@ -196,119 +160,6 @@ class UsernameSpoofer:
     def request(self, flow: ProxyFlow) -> None:
         del flow
 
-    @staticmethod
-    def _fetch_authenticated_user_id() -> int | None:
-        cookie = _get_roblosecurity()
-        if not cookie:
-            return None
-        try:
-            return _authenticated_user_id(cookie)
-        except (requests.RequestException, AttributeError, TypeError, ValueError) as exc:
-            log_buffer.log('username-spoofer', f'Failed to fetch authenticated user id: {exc}')
-            return None
-
-    @staticmethod
-    def _game_creator_type_user_value(current_value: JsonValue, key: str) -> str | int:
-        if isinstance(current_value, str):
-            if current_value.startswith('Enum.CreatorType.'):
-                return 'Enum.CreatorType.User'
-            return 'User'
-        if isinstance(current_value, bool):
-            return 'User'
-        if isinstance(current_value, int):
-            # Engine Enum.CreatorType is User=0, Group=1; web API creatorType
-            # fields commonly use User=1, Group=2. The capital joinScript
-            # field maps to the engine value.
-            return 0 if key == 'CreatorType' else 1
-        return 'User'
-
-    @classmethod
-    def _set_creator_id_type_pair(
-        cls, value: JsonObject, creator_id_key: str, creator_type_key: str, user_id: int
-    ) -> int:
-        if creator_id_key not in value and creator_type_key not in value:
-            return 0
-
-        changed = 0
-        if creator_id_key in value and value.get(creator_id_key) != user_id:
-            value[creator_id_key] = user_id
-            changed += 1
-
-        if creator_type_key in value:
-            user_type = cls._game_creator_type_user_value(
-                value.get(creator_type_key), creator_type_key
-            )
-            if value.get(creator_type_key) != user_type:
-                value[creator_type_key] = user_type
-                changed += 1
-        return changed
-
-    @classmethod
-    def _set_game_creator_fields(cls, value: JsonValue, user_id: int) -> int:
-        if isinstance(value, list):
-            return sum(cls._set_game_creator_fields(item, user_id) for item in value)
-        if not isinstance(value, dict):
-            return 0
-
-        changed = 0
-        for creator_id_key, creator_type_key in (
-            ('CreatorId', 'CreatorType'),
-            ('CreatorId', 'CreatorTypeEnum'),
-            ('CreatorTargetId', 'CreatorType'),
-            ('CreatorTargetId', 'CreatorTypeEnum'),
-            ('creatorId', 'creatorType'),
-            ('creatorTargetId', 'creatorType'),
-        ):
-            changed += cls._set_creator_id_type_pair(
-                value, creator_id_key, creator_type_key, user_id
-            )
-
-        for child in value.values():
-            changed += cls._set_game_creator_fields(child, user_id)
-        return changed
-
-    def _gamejoin_replacement_content(self, content: bytes) -> bytes | None:
-        payload_value: object = json.loads(content.decode('utf-8'))
-        payload_object = as_json_object(payload_value)
-        if payload_object is None:
-            return None
-        user_id = self._fetch_authenticated_user_id()
-        if user_id is None:
-            return None
-        if self._set_game_creator_fields(payload_object, user_id) <= 0:
-            return None
-        return json.dumps(
-            payload_object,
-            separators=(',', ':'),
-            ensure_ascii=False,
-        ).encode('utf-8')
-
-    def _modify_gamejoin_response(self, flow: ProxyFlow) -> bool:
-        if not any(fragment in flow.request.pretty_url for fragment in GAMEJOIN_ENDPOINT_FRAGMENTS):
-            return False
-        with self._lock:
-            enabled = bool(self._runtime_state.get('self_game_creator'))
-        if not enabled:
-            return False
-        response = flow.response
-        if response is None:
-            return False
-        try:
-            replacement = self._gamejoin_replacement_content(response.content)
-        except (
-            UnicodeDecodeError,
-            json.JSONDecodeError,
-            AttributeError,
-            TypeError,
-            ValueError,
-        ) as exc:
-            log_buffer.log('username-spoofer', f'Failed to modify gamejoin response: {exc}')
-            return False
-        if replacement is None:
-            return False
-        response.content = replacement
-        return True
-
     def _profile_replacement_content(
         self,
         content: bytes,
@@ -351,8 +202,6 @@ class UsernameSpoofer:
 
     def response(self, flow: ProxyFlow) -> None:
         if flow.response is None or not flow.response.content:
-            return
-        if self._modify_gamejoin_response(flow):
             return
         if PROFILE_ENDPOINT_FRAGMENT not in flow.request.pretty_url:
             return

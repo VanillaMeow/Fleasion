@@ -6,7 +6,17 @@ import pytest
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from PySide6.QtCore import QPoint, QPropertyAnimation
-from PySide6.QtWidgets import QApplication, QGroupBox, QLabel, QLineEdit, QListWidget, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QGroupBox,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QPushButton,
+    QRadioButton,
+    QWidget,
+)
 
 import fleasion.gui.rando_stuff_tab as rando
 from fleasion.gui.modifications_tab import CollapsibleSection
@@ -162,3 +172,31 @@ def test_collapsed_misc_sections_shrink_to_header_height(monkeypatch: pytest.Mon
     tab.close()
     tab.deleteLater()
     app.processEvents()
+
+
+def test_gamejoin_controls_stay_disabled_when_proxy_gates_are_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _qapp()
+    tab = _build_tab(monkeypatch)
+    try:
+        for enabled in (True, False, True):
+            tab.set_proxy_features_enabled(enabled)
+            reserved = _section_content(_section(tab, '_rejoin_section'))
+            blacklist = _section_content(_section(tab, '_subplace_blacklist_section'))
+            for control in reserved.findChildren(QLineEdit) + reserved.findChildren(QPushButton):
+                assert not control.isEnabled()
+            for control in blacklist.findChildren(QRadioButton) + blacklist.findChildren(
+                QPushButton
+            ):
+                assert not control.isEnabled()
+            subplace = cast('QLineEdit', tab.__dict__['_subplace_id_input'])
+            creator = cast('QCheckBox', tab.__dict__['_username_self_game_creator_chk'])
+            assert not subplace.isEnabled()
+            assert not creator.isEnabled()
+            assert not creator.isChecked()
+        assert _private_server_input(tab).isEnabled()
+    finally:
+        tab.close()
+        tab.deleteLater()
+        _qapp().processEvents()

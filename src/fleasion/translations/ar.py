@@ -679,6 +679,7 @@ ARABIC: dict[str, str] = {
     'proxy.table.status': 'الحالة',
     'proxy.table.time': 'الوقت',
     'proxy.tunnel_note': 'لا تتوفر معاينة — جرى تمرير هذا الاتصال عبر نفق (TLS غير مكشوف) دون فك تشفيره.',
+    'proxy.gamejoin_disabled': 'تم تعطيل ميزات Gamejoin بعد تحديث Roblox. لم يعد Fleasion يعترض طلبات Gamejoin.',
     'proxy_gate.disabled_message': 'هذا القسم مغلق لأن الوكيل معطّل في الإعدادات.',
     'rando.account.add_title': 'إضافة حساب',
     'rando.account.change_cookie_title': 'تغيير ملف تعريف الارتباط',

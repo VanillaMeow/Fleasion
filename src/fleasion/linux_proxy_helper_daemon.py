@@ -120,9 +120,10 @@ ALLOWED_PROXY_HOSTS = frozenset(
         'clientsettings.roblox.com',
         'clientsettingscdn.roblox.com',
         'fts.rbxcdn.com',
-        'gamejoin.roblox.com',
     }
 )
+# Retain legacy gamejoin redirects as cleanup targets only
+_HOSTS_CLEANUP_HOSTS = ALLOWED_PROXY_HOSTS | {'gamejoin.roblox.com'}
 SYSTEM_CA_NAME = 'fleasion-proxy-ca.crt'
 SYSTEM_CA_DIRS = (
     Path('/usr/local/share/ca-certificates'),
@@ -662,8 +663,8 @@ def _clean_hosts_content(content: str) -> str:
         parts = active.split()
         return (
             len(parts) >= 2
-            and parts[0] == '127.0.0.1'
-            and any(host.lower() in ALLOWED_PROXY_HOSTS for host in parts[1:])
+            and parts[0] in {'127.0.0.1', '::1'}
+            and any(host.lower() in _HOSTS_CLEANUP_HOSTS for host in parts[1:])
         )
 
     return ''.join(
@@ -692,6 +693,9 @@ def _hosts_file_has_loopback_entries(hosts: set[str]) -> bool:
     try:
         content = HOSTS_FILE.read_text(encoding='utf-8', errors='replace')
     except OSError:
+        return False
+    if 'gamejoin.roblox.com' in _parse_active_loopback_hosts(content):
+        _log('Legacy gamejoin loopback entry must be removed from the read-only hosts configuration')
         return False
     return _hosts_content_has_loopback_entries(content, hosts)
 
@@ -908,7 +912,7 @@ def _parse_active_loopback_hosts(content: str) -> set[str]:
     for raw_line in content.splitlines():
         active = raw_line.split('#', 1)[0].strip()
         parts = active.split()
-        if len(parts) >= 2 and parts[0] == '127.0.0.1':
+        if len(parts) >= 2 and parts[0] in {'127.0.0.1', '::1'}:
             hosts.update(part.lower() for part in parts[1:])
     return hosts
 

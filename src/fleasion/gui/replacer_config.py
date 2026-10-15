@@ -97,7 +97,6 @@ from .proxy_gate import ProxyGate
 from .proxy_tab import ProxyTrafficTab
 from .rando_stuff_tab import RandoStuffTab
 from .settings_tab import SettingsTab
-from .subplace_joiner_tab import SubplaceJoinerTab
 from .theme import ThemeManager
 
 if TYPE_CHECKING:
@@ -913,8 +912,7 @@ class ReplacerConfigWindow(QDialog):
         self._cache_viewer_tab: CacheViewerTab | None = None
         self._settings_tab: SettingsTab | None = None
         self._rando_stuff_tab: RandoStuffTab | None = None
-        self._subplace_tab: SubplaceJoinerTab | None = None
-        self._registered_module_interceptors: list[RandoStuffTab | SubplaceJoinerTab] = []
+        self._registered_module_interceptors: list[RandoStuffTab] = []
         self._group_depth_by_path: dict[tuple[int, ...], int] = {}
         self._refreshing_tree = False
         self._tree_config_name = self.config_manager.last_config
@@ -1038,12 +1036,12 @@ class ReplacerConfigWindow(QDialog):
             QVBoxLayout(page).setContentsMargins(0, 0, 0, 0)
             self._tab_pages[name] = page
             wrapper = page
-            if name == 'subplace_joiner':
-                wrapper = self._proxy_required(page)
-            elif name == 'proxy':
+            if name == 'proxy':
                 wrapper = self._env_proxy_required(page)
             index = self.tab_widget.addTab(wrapper, title)
             self._tab_indices[name] = index
+            if name == 'subplace_joiner':
+                self.tab_widget.setTabToolTip(index, tr('proxy.gamejoin_disabled'))
             self.tab_widget.setTabEnabled(index, False)  # ruff: ignore[boolean-positional-value-in-call]
 
         main_layout.addWidget(self.tab_widget)
@@ -1078,7 +1076,6 @@ class ReplacerConfigWindow(QDialog):
 
     def _preload_tabs(self) -> Generator[None]:
         config = self.config_manager
-        # The account selector feeds the joiner, so construct it first
         rando_tab = RandoStuffTab(
             parent=self._tab_pages['miscellaneous'],
             config_manager=config,
@@ -1088,26 +1085,6 @@ class ReplacerConfigWindow(QDialog):
         yield from rando_tab.build_ui()
         self._rando_stuff_tab = rando_tab
         self._install_tab('miscellaneous', self._rando_stuff_tab)
-        if self.proxy_master is not None:
-            self.proxy_master.register_module_interceptor(self._rando_stuff_tab)
-            self._registered_module_interceptors.append(self._rando_stuff_tab)
-        yield
-        subplace_tab = SubplaceJoinerTab(
-            rando_tab=self._rando_stuff_tab,
-            config_manager=config,
-            parent=self._tab_pages['subplace_joiner'],
-            defer_setup=True,
-            proxy_master=self.proxy_master,
-        )
-        yield from subplace_tab.build_ui()
-        self._subplace_tab = subplace_tab
-        self._rando_stuff_tab.selected_account_changed.connect(
-            self._subplace_tab.set_selected_account
-        )
-        self._install_tab('subplace_joiner', self._subplace_tab)
-        if self.proxy_master is not None:
-            self.proxy_master.register_module_interceptor(self._subplace_tab)
-            self._registered_module_interceptors.append(self._subplace_tab)
         yield
         self._proxy_traffic_tab = ProxyTrafficTab(
             config_manager=config,

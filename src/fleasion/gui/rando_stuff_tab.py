@@ -161,10 +161,6 @@ def _authenticated_user_response(cookie: str) -> _requests.Response:
     return session.get('https://users.roblox.com/v1/users/authenticated', timeout=10)
 
 
-def _json_object(raw: bytes | str) -> dict[str, object]:
-    return require_object_dict(json.loads(raw))
-
-
 def _response_json_object(response: _requests.Response) -> dict[str, object]:
     return require_object_dict(response.json())
 
@@ -180,21 +176,6 @@ def _run_contained_action(
         on_error(exc)
         return False
     return True
-
-
-def _run_proxy_action(
-    category: str,
-    error_prefix: str,
-    action: Callable[[], None],
-    *,
-    on_error: Callable[[], None] | None = None,
-) -> None:
-    def _handle_error(exc: Exception) -> None:
-        log_buffer.log(category, f'{error_prefix}: {exc}')
-        if on_error is not None:
-            on_error()
-
-    _run_contained_action(action, _handle_error)
 
 
 def get_auth_ticket(cookie: str) -> str | None:
@@ -268,53 +249,6 @@ def _get_access_code(place_id: str, link_code: str, cookie: str) -> str | None:
         pass
 
     return None
-
-
-def _preseed_root_join_response(root_place_id: str, cookie: str) -> _requests.Response:
-    sess = _requests.Session()
-    sess.trust_env = False
-    sess.proxies = {}
-    sess.verify = False
-    sess.headers.update(
-        {
-            'User-Agent': 'Roblox/WinInet',
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'Referer': 'https://www.roblox.com/',
-            'Origin': 'https://www.roblox.com',
-            'Cookie': f'.ROBLOSECURITY={cookie};',
-        }
-    )
-    try:
-        token_resp = sess.post('https://auth.roblox.com/v2/logout', timeout=10)
-        token = token_resp.headers.get('x-csrf-token') or token_resp.headers.get('X-CSRF-TOKEN')
-        if token:
-            sess.headers['X-CSRF-TOKEN'] = token
-    except _requests.RequestException:
-        pass
-
-    payload = {
-        'placeId': int(root_place_id),
-        'isTeleport': True,
-        'isImmersiveAdsTeleport': False,
-        'gameJoinAttemptId': str(uuid.uuid4()),
-    }
-    return sess.post('https://gamejoin.roblox.com/v1/join-game', json=payload, timeout=15)
-
-
-def _preseed_root_place_for_subplace(root_place_id: str, cookie: str) -> bool:
-    """Prime Roblox's join state for a subplace launch by joining the root place."""
-    if not root_place_id or not cookie:
-        return False
-    try:
-        resp = _preseed_root_join_response(root_place_id, cookie)
-        try:
-            return resp.status_code == 200 and resp.json().get('status') == 2
-        except _requests.RequestException:
-            return False
-    except (ValueError, _requests.RequestException) as exc:
-        log_buffer.log('accounts', f'Subplace root pre-seed error: {exc}')
-        return False
 
 
 _UUID_RE = re.compile(
@@ -721,7 +655,6 @@ class RandoStuffTab(QWidget):
             self._parse_numeric_id_list(','.join(str(x) for x in loaded_subplace_blacklist))
         )
         self._subplace_block_mode = 'stall' if loaded_subplace_mode == 'stall' else 'block'
-        self._blocked_subplace_log_at: dict[str, float] = {}
         self._subplace_unblock_until = 0.0
         self._lock = threading.Lock()
 
@@ -732,9 +665,6 @@ class RandoStuffTab(QWidget):
 
         self._accounts: list[Account] = _load_accounts()
         self._game_jobs: dict[str, str] = {}  # placeId -> jobId, session-only memory
-        self._account_manager_job_id: str = ''
-        self._account_manager_capture_place_id: str | None = None
-        self._account_manager_teleport_place_id: str | None = None
         self._auto_filled_for_place: str | None = None
         self._username_spoofer_current_user_id: str | None = None
         self._username_spoofer_current_username = ''
@@ -798,101 +728,6 @@ class RandoStuffTab(QWidget):
                 ids.append(normalized)
         return ids
 
-    def _is_subplace_blacklisted(self, place_id: object) -> bool:
-        normalized = self._normalize_numeric_id(place_id)
-        return normalized is not None and normalized in self._subplace_blacklisted_ids
-
-    def _apply_account_manager_subplace_teleport(self, body: dict[str, object]) -> bool:
-        body_place_id = self._normalize_numeric_id(body.get('placeId'))
-        with self._lock:
-            teleport_place_id = self._account_manager_teleport_place_id
-        if not teleport_place_id or body_place_id != teleport_place_id:
-            return False
-        if body.get('isTeleport') is not True:
-            body['isTeleport'] = True
-            return True
-        return False
-
-    def _clear_account_manager_subplace_teleport_if_complete(
-        self, flow: ProxyFlow, req_path: str
-    ) -> None:
-        with self._lock:
-            teleport_place_id = self._account_manager_teleport_place_id
-        if not teleport_place_id or req_path not in {
-            *self._WANTED_ENDPOINTS,
-            self._PRIVATE_GAME_ENDPOINT,
-            self._RESERVED_GAME_ENDPOINT,
-        }:
-            return
-        try:
-            body = cast('dict[str, object]', json.loads(flow.request.content))
-        except UnicodeDecodeError, json.JSONDecodeError, TypeError:
-            return
-        if self._normalize_numeric_id(body.get('placeId')) != teleport_place_id:
-            return
-        resp_json: dict[str, object] = {}
-        try:
-            if flow.response is not None:
-                resp_json = cast('dict[str, object]', json.loads(flow.response.content))
-        except UnicodeDecodeError, json.JSONDecodeError, TypeError:
-            resp_json = {}
-        status = resp_json.get('status')
-        if status in {0, 1}:
-            return
-        with self._lock:
-            if self._account_manager_teleport_place_id == teleport_place_id:
-                self._account_manager_teleport_place_id = None
-
-    def _drop_subplace_join(
-        self, flow: ProxyFlow, place_id: str, attempt_id: str | None = None
-    ) -> None:
-        with self._lock:
-            mode = self._subplace_block_mode
-
-        if mode == 'stall':
-            payload = {
-                'jobId': None,
-                'status': 1,
-                'joinScriptUrl': None,
-                'authenticationUrl': None,
-                'authenticationTicket': None,
-                'message': '',
-                'joinScript': None,
-                'queuePosition': 0,
-            }
-            log_interval = 10.0
-        else:
-            payload = {
-                'jobId': None,
-                'status': 12,
-                'joinScriptUrl': None,
-                'authenticationUrl': None,
-                'authenticationTicket': None,
-                'message': 'Teleport blocked by Subplace Blacklist.',
-                'joinScript': None,
-                'queuePosition': 0,
-            }
-            log_interval = 5.0
-
-        flow.drop_request = True
-        flow.drop_status_code = 200
-        flow.drop_body = json.dumps(payload, separators=(',', ':')).encode('utf-8')
-
-        key = f'{place_id}:{attempt_id or ""}'
-        now = time.time()
-        last = self._blocked_subplace_log_at.get(key, 0.0)
-        if now - last >= log_interval:
-            self._blocked_subplace_log_at[key] = now
-            if len(self._blocked_subplace_log_at) > 512:
-                cutoff = now - 30.0
-                self._blocked_subplace_log_at = {
-                    k: ts for k, ts in self._blocked_subplace_log_at.items() if ts >= cutoff
-                }
-            log_buffer.log(
-                'subplace',
-                f'Blocked join request to blacklisted subplace ID: {place_id}',
-            )
-
     def _set_subplace_block_mode(self, mode: str, checked: bool) -> None:
         if not checked:
             return
@@ -947,7 +782,7 @@ class RandoStuffTab(QWidget):
             'self_name': self._username_self_input.text(),
             'self_apply_ingame': self._username_self_apply_chk.isChecked(),
             'self_verified': self._username_self_verified_chk.isChecked(),
-            'self_game_creator': self._username_self_game_creator_chk.isChecked(),
+            'self_game_creator': False,
         }
 
     def _set_username_spoofer_state(self, state: UsernameSpooferState) -> None:
@@ -960,7 +795,7 @@ class RandoStuffTab(QWidget):
                 'self_name': str(state.get('self_name', '')),
                 'self_apply_ingame': bool(state.get('self_apply_ingame', False)),
                 'self_verified': bool(state.get('self_verified', False)),
-                'self_game_creator': bool(state.get('self_game_creator', False)),
+                'self_game_creator': False,
             }
 
     def _persist_username_spoofer_state(self, state: UsernameSpooferState) -> None:
@@ -1017,6 +852,9 @@ class RandoStuffTab(QWidget):
         root = QVBoxLayout(container)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(10)
+        gamejoin_notice = QLabel(tr('proxy.gamejoin_disabled'))
+        gamejoin_notice.setWordWrap(True)
+        root.addWidget(gamejoin_notice)
         scroll.setWidget(container)
         outer.addWidget(scroll)
         self._update_container_bg()
@@ -1028,6 +866,8 @@ class RandoStuffTab(QWidget):
             expanded=True,
         )
         rejoin_body = QWidget()
+        rejoin_body.setEnabled(False)
+        self._rejoin_section.setToolTip(tr('proxy.gamejoin_disabled'))
         rjl = QVBoxLayout(rejoin_body)
         rjl.setContentsMargins(0, 0, 0, 0)
         rjl.setSpacing(6)
@@ -1134,6 +974,8 @@ class RandoStuffTab(QWidget):
         account_details_layout.addWidget(self._private_server_input)
 
         self._subplace_id_input = QLineEdit()
+        self._subplace_id_input.setEnabled(False)
+        self._subplace_id_input.setToolTip(tr('proxy.gamejoin_disabled'))
         self._subplace_id_input.setPlaceholderText(
             tr('ui.gui.rando_stuff_tab.subplace_id_optional')
         )
@@ -1233,12 +1075,9 @@ class RandoStuffTab(QWidget):
         self._username_self_game_creator_chk = QCheckBox(
             tr('ui.gui.rando_stuff_tab.make_yourself_game_creator')
         )
-        self._username_self_game_creator_chk.setToolTip(
-            tr('ui.gui.rando_stuff_tab.force_gamejoin_creator_metadata_to_use_your')
-        )
-        self._username_self_game_creator_chk.setChecked(
-            bool(self._username_spoofer_state.get('self_game_creator', False))
-        )
+        self._username_self_game_creator_chk.setToolTip(tr('proxy.gamejoin_disabled'))
+        self._username_self_game_creator_chk.setEnabled(False)
+        self._username_self_game_creator_chk.setChecked(False)
         self_row.addWidget(self_label)
         self_row.addWidget(self._username_self_input, 1)
         self_row.addWidget(self._username_self_apply_chk)
@@ -1299,6 +1138,8 @@ class RandoStuffTab(QWidget):
             expanded=True,
         )
         subplace_blacklist_body = QWidget()
+        subplace_blacklist_body.setEnabled(False)
+        self._subplace_blacklist_section.setToolTip(tr('proxy.gamejoin_disabled'))
         subplace_blacklist_layout = QVBoxLayout(subplace_blacklist_body)
         subplace_blacklist_layout.setContentsMargins(0, 0, 0, 0)
         subplace_blacklist_layout.setSpacing(6)
@@ -1415,21 +1256,7 @@ class RandoStuffTab(QWidget):
             self._last_access_code = access_code or None
 
     def _on_rejoin_clicked(self) -> None:
-        place_id = self._place_id_input.text().strip()
-        access_code = self._access_code_input.text().strip()
-        with self._lock:
-            if not place_id or not access_code:
-                log_buffer.log(
-                    'randostuff',
-                    'No reserved server placeID/accessCode set yet - join one first or enter them manually.',
-                )
-                return
-            self._last_place_id = place_id
-            self._last_access_code = access_code
-            self._doing_rejoin = True
-        log_buffer.log('randostuff', f'Rejoin triggered - placeId={place_id}')
-        if not launch_as_standard_user(f'roblox://placeId={place_id}'):
-            log_buffer.log('randostuff', 'Failed to launch Roblox without elevation')
+        log_buffer.log('randostuff', tr('proxy.gamejoin_disabled'))
 
     def _update_labels(self, place_id: object, access_code: object) -> None:
         def _do() -> None:
@@ -1455,7 +1282,7 @@ class RandoStuffTab(QWidget):
     def _show_reserved_server_help(self) -> None:
         msg = QMessageBox(self)
         msg.setWindowTitle(tr('ui.gui.rando_stuff_tab.reserved_server_info'))
-        msg.setText(tr('ui.gui.rando_stuff_tab.b_what_the_hell_is_a_reserved'))
+        msg.setText(tr('proxy.gamejoin_disabled'))
         msg.setIcon(QMessageBox.Icon.NoIcon)
         msg.exec()
 
@@ -2028,7 +1855,7 @@ class RandoStuffTab(QWidget):
             return
         username = acc.get('username') or tr('rando.account.unknown_parenthesized')
         link = self._private_server_input.text().strip()
-        subplace_raw = self._subplace_id_input.text().strip()
+        subplace_raw = ''
         subplace_id = _parse_optional_place_id(subplace_raw)
         if subplace_raw and not subplace_id:
             log_buffer.log('accounts', f'Launch aborted: invalid subplace ID: {subplace_raw}')
@@ -2208,32 +2035,14 @@ class RandoStuffTab(QWidget):
         log_buffer.log('accounts', f'Resolved Roblox executable: {exe}')
 
         place_id, link_code = _parse_game_link(private_server_link)
-        launch_place_id = subplace_id or place_id
+        subplace_id = ''
+        launch_place_id = place_id
         log_buffer.log(
             'accounts',
             f'Launch parse result: placeId={place_id or "(none)"}, '
             f'subplaceId={subplace_id or "(none)"}, launchPlaceId={launch_place_id or "(none)"}, '
             f'linkCode={"present" if bool(link_code) else "missing"}, jobId={"present" if bool(job_id) else "missing"}',
         )
-        root_place_id = self._normalize_numeric_id(place_id)
-        normalized_launch_place_id = self._normalize_numeric_id(launch_place_id)
-        is_distinct_subplace_launch = (
-            bool(subplace_id)
-            and root_place_id is not None
-            and normalized_launch_place_id is not None
-            and normalized_launch_place_id != root_place_id
-        )
-        with self._lock:
-            self._account_manager_teleport_place_id = (
-                normalized_launch_place_id if is_distinct_subplace_launch else None
-            )
-        if is_distinct_subplace_launch and root_place_id is not None:
-            ok = _preseed_root_place_for_subplace(root_place_id, cookie)
-            if not ok:
-                log_buffer.log(
-                    'accounts',
-                    f'Subplace root pre-seed failed for root {root_place_id}',
-                )
         launch_ok = False
         if place_id and link_code and launch_place_id:
             # Private server launch
@@ -2283,9 +2092,6 @@ class RandoStuffTab(QWidget):
             # Normal game link — optionally join a specific job
             ticket = self._get_launch_auth_ticket(cookie, 'place' if not job_id else 'job-id')
             if ticket:
-                if not job_id:
-                    with self._lock:
-                        self._account_manager_capture_place_id = launch_place_id
                 roblox_player_uri = _build_auth_ticket_place_uri(
                     ticket,
                     launch_place_id,
@@ -2302,7 +2108,7 @@ class RandoStuffTab(QWidget):
                 if not launch_ok:
                     log_buffer.log('accounts', 'Failed to launch Roblox URI without elevation')
             else:
-                if IS_MACOS:
+                if IS_MACOS or job_id:
                     self._show_selected_account_launch_failed(
                         username,
                         tr('rando.account.launch_failed.place_ticket'),
@@ -2311,15 +2117,6 @@ class RandoStuffTab(QWidget):
                     log_buffer.log('accounts', f'Launch failed for account: {username}')
                     return
                 log_buffer.log('accounts', 'Failed to get auth ticket, falling back to deeplink')
-                if not job_id:
-                    with self._lock:
-                        self._account_manager_capture_place_id = launch_place_id
-                    # Proxy intercept will handle jobId capture; set pending job ID to empty
-                    with self._lock:
-                        self._account_manager_job_id = ''
-                else:
-                    with self._lock:
-                        self._account_manager_job_id = job_id
                 deeplink = f'roblox://experiences/start?placeId={launch_place_id}'
                 log_buffer.log('accounts', f'Launching Roblox executable fallback: {exe}')
                 exe_started = launch_as_standard_user(exe)
@@ -2550,271 +2347,8 @@ class RandoStuffTab(QWidget):
 
     # Proxy interceptor hooks
 
-    def _handle_private_game_request(self, flow: ProxyFlow) -> None:
-        body = _json_object(flow.request.content)
-        if self._apply_account_manager_subplace_teleport(body):
-            flow.request.raw_content = json.dumps(body, separators=(',', ':')).encode('utf-8')
-
-    def _handle_reserved_game_request(self, flow: ProxyFlow) -> None:
-        body = _json_object(flow.request.content)
-        if self._apply_account_manager_subplace_teleport(body):
-            flow.request.raw_content = json.dumps(body, separators=(',', ':')).encode('utf-8')
-        place_id = body.get('placeId')
-        access_code = body.get('accessCode')
-        attempt_id = body.get('gameJoinAttemptId')
-        normalized_place_id = self._normalize_numeric_id(place_id)
-        if (
-            normalized_place_id is not None
-            and normalized_place_id in self._subplace_blacklisted_ids
-            and not self._is_subplace_unblock_active()
-        ):
-            self._drop_subplace_join(
-                flow,
-                normalized_place_id,
-                attempt_id=str(attempt_id) if attempt_id else None,
-            )
-            return
-        session_id = flow.request.headers.get('Roblox-Session-Id', '')
-        if place_id is None or access_code is None:
-            return
-        with self._lock:
-            self._last_place_id = str(place_id)
-            self._last_access_code = str(access_code)
-            self._last_session_id = session_id or None
-        has_session = bool(session_id)
-        log_buffer.log(
-            'randostuff',
-            f'Logged reserved server — placeId={place_id}, '
-            f'sessionHeader={"present" if has_session else "missing"}',
-        )
-        self._update_labels(place_id, access_code)
-
-    def _precheck_blacklisted_join(self, flow: ProxyFlow) -> bool:
-        try:
-            body = _json_object(flow.request.content)
-        except UnicodeDecodeError, json.JSONDecodeError, TypeError:
-            return False
-        blocked_place_id = self._normalize_numeric_id(body.get('placeId'))
-        if (
-            blocked_place_id is None
-            or blocked_place_id not in self._subplace_blacklisted_ids
-            or self._is_subplace_unblock_active()
-        ):
-            return False
-        attempt_id = body.get('gameJoinAttemptId')
-        self._drop_subplace_join(
-            flow,
-            blocked_place_id,
-            attempt_id=str(attempt_id) if attempt_id else None,
-        )
-        return True
-
-    def _account_request_body(self, flow: ProxyFlow) -> tuple[dict[str, object] | None, bool]:
-        try:
-            body = _json_object(flow.request.content)
-        except UnicodeDecodeError, json.JSONDecodeError, TypeError:
-            return None, False
-        return body, self._apply_account_manager_subplace_teleport(body)
-
-    def _redirect_pending_job(
-        self,
-        flow: ProxyFlow,
-        account_body: dict[str, object] | None,
-        pending_job: str,
-    ) -> None:
-        body = account_body if account_body is not None else _json_object(flow.request.content)
-        body['gameId'] = pending_job
-        flow.request.url = 'https://gamejoin.roblox.com/v1/join-game-instance'
-        flow.request.raw_content = json.dumps(body, separators=(',', ':')).encode('utf-8')
-        with self._lock:
-            self._account_manager_job_id = ''
-        log_buffer.log(
-            'accounts',
-            f'Redirected join-game -> join-game-instance with jobId={pending_job}',
-        )
-
-    def _handle_wanted_join_request(self, flow: ProxyFlow, req_path: str) -> None:
-        if self._precheck_blacklisted_join(flow):
-            return
-
-        account_body, account_body_modified = self._account_request_body(flow)
-        if req_path == '/v1/join-game':
-            with self._lock:
-                pending_job = self._account_manager_job_id
-            if pending_job:
-                _run_proxy_action(
-                    'accounts',
-                    'Failed to intercept join-game for jobId',
-                    lambda: self._redirect_pending_job(flow, account_body, pending_job),
-                )
-                return
-
-        if account_body_modified and account_body is not None:
-            flow.request.raw_content = json.dumps(account_body, separators=(',', ':')).encode(
-                'utf-8'
-            )
-
-        try:
-            req_body = (
-                account_body if account_body is not None else _json_object(flow.request.content)
-            )
-        except UnicodeDecodeError, json.JSONDecodeError, TypeError:
-            attempt_id = None
-        else:
-            attempt_id = req_body.get('gameJoinAttemptId')
-
-        with self._lock:
-            doing = self._doing_rejoin
-            active_id = self._active_rejoin_attempt_id
-            place_id = self._last_place_id
-            access_code = self._last_access_code
-            session_id = self._last_session_id
-
-            if doing:
-                self._doing_rejoin = False
-                self._active_rejoin_attempt_id = attempt_id
-                active_id = attempt_id
-            elif active_id is None or attempt_id != active_id:
-                return
-
-        if place_id is None or access_code is None:
-            log_buffer.log(
-                'randostuff',
-                'Rejoin flag set but no reserved server stored — aborting.',
-            )
-            with self._lock:
-                self._active_rejoin_attempt_id = None
-            return
-
-        normalized_place_id = self._normalize_numeric_id(place_id)
-        if (
-            normalized_place_id is not None
-            and normalized_place_id in self._subplace_blacklisted_ids
-            and not self._is_subplace_unblock_active()
-        ):
-            self._drop_subplace_join(
-                flow,
-                normalized_place_id,
-                attempt_id=str(attempt_id) if attempt_id else None,
-            )
-            with self._lock:
-                self._active_rejoin_attempt_id = None
-                self._awaiting_rejoin_response = False
-            return
-
-        new_payload = {
-            'placeId': place_id,
-            'accessCode': access_code,
-            'isTeleport': True,
-            'isImmersiveAdsTeleport': False,
-        }
-        flow.request.url = 'https://gamejoin.roblox.com/v1/join-reserved-game'
-        flow.request.raw_content = json.dumps(new_payload).encode('utf-8')
-        if session_id:
-            flow.request.headers['Roblox-Session-Id'] = session_id
-        log_buffer.log(
-            'randostuff',
-            'Rejoin request -> POST gamejoin.roblox.com/v1/join-reserved-game',
-        )
-        with self._lock:
-            self._awaiting_rejoin_response = True
-
     def request(self, flow: ProxyFlow) -> None:
-        url = flow.request.pretty_url
-        if 'gamejoin.roblox.com' not in url:
-            return
-
-        req_path = urlparse(url).path
-        if req_path == self._PRIVATE_GAME_ENDPOINT:
-            _run_proxy_action(
-                'accounts',
-                'Failed to parse join-private-game body',
-                lambda: self._handle_private_game_request(flow),
-            )
-            return
-        if req_path == self._RESERVED_GAME_ENDPOINT:
-            _run_proxy_action(
-                'randostuff',
-                'Failed to parse join-reserved-game body',
-                lambda: self._handle_reserved_game_request(flow),
-            )
-            return
-        if req_path in self._WANTED_ENDPOINTS:
-            self._handle_wanted_join_request(flow, req_path)
-
-    def _capture_account_manager_job(self, flow: ProxyFlow, capture_place_id: str) -> None:
-        response = flow.response
-        if response is None:
-            msg = 'Proxy response is unavailable while capturing account-manager job ID'
-            raise RuntimeError(msg)
-        resp_json = _json_object(response.content)
-        job_id = _extract_job_id(str(resp_json.get('jobId') or resp_json.get('gameId') or ''))
-        if not job_id:
-            return
-        self._game_jobs[capture_place_id] = job_id
-
-        def _update_ui(jid: str = job_id, pid: str = capture_place_id) -> None:
-            if not self._job_id_input.text().strip():
-                self._job_id_input.setText(jid)
-                self._auto_filled_for_place = pid
-
-        self._on_main(_update_ui)
-        log_buffer.log(
-            'accounts',
-            f'Captured jobId={job_id} for placeId={capture_place_id}',
-        )
-
-    def _clear_active_rejoin_attempt(self) -> None:
-        with self._lock:
-            self._active_rejoin_attempt_id = None
-
-    def _process_rejoin_response(self, flow: ProxyFlow) -> None:
-        response = flow.response
-        if response is None:
-            log_buffer.log('randostuff', 'Rejoin response: (none)')
-            return
-        resp_json = _json_object(response.content.decode('utf-8', errors='replace'))
-        join_ready = bool(resp_json.get('joinScriptUrl'))
-        log_buffer.log(
-            'randostuff',
-            f'Rejoin response status: http={response.status_code}, status={resp_json.get("status")}, '
-            f'joinScriptUrl={"yes" if join_ready else "no"}',
-        )
-        if resp_json.get('status') == 2 or join_ready:
-            self._clear_active_rejoin_attempt()
-            log_buffer.log('randostuff', 'Reserved server join ready — stopping redirect.')
-        elif response.status_code >= 400:
-            self._clear_active_rejoin_attempt()
-            log_buffer.log('randostuff', 'Reserved server join error — stopping redirect.')
+        del flow
 
     def response(self, flow: ProxyFlow) -> None:
-        if 'gamejoin.roblox.com' not in flow.request.pretty_url:
-            return
-
-        req_path = urlparse(flow.request.pretty_url).path
-        self._clear_account_manager_subplace_teleport_if_complete(flow, req_path)
-
-        with self._lock:
-            capture_place_id = self._account_manager_capture_place_id
-        if capture_place_id and req_path in {'/v1/join-game', '/v1/join-game-instance'}:
-            _run_proxy_action(
-                'accounts',
-                'Failed to capture jobId from response',
-                lambda: self._capture_account_manager_job(flow, capture_place_id),
-            )
-            with self._lock:
-                self._account_manager_capture_place_id = None
-
-        with self._lock:
-            waiting = self._awaiting_rejoin_response
-            if waiting:
-                self._awaiting_rejoin_response = False
-        if not waiting:
-            return
-
-        _run_proxy_action(
-            'randostuff',
-            'Could not parse rejoin response JSON',
-            lambda: self._process_rejoin_response(flow),
-            on_error=self._clear_active_rejoin_attempt,
-        )
+        del flow

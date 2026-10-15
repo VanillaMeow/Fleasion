@@ -56,14 +56,9 @@ def config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> manager.ConfigMan
     return manager.ConfigManager()
 
 
-def _no_user_resolution(_tab: replacer_config.SubplaceJoinerTab) -> None:
-    return
-
-
 def test_dashboard_created_while_glass_active_restores_opaque_window(
     app: QApplication, config: manager.ConfigManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(replacer_config.SubplaceJoinerTab, '_resolve_current_user', _no_user_resolution)
     ThemeManager.apply_theme('Glass')
     window = replacer_config.ReplacerConfigWindow(config)
     window.resize(900, 730)
@@ -119,9 +114,7 @@ def test_existing_registered_dialog_preserves_custom_mask_after_glass(
 
 
 @pytest.mark.parametrize('popup_type', ['menu', 'combo'])
-def test_x11_rounded_popup_mask_is_real_and_restored(
-    app: QApplication, popup_type: str
-) -> None:
+def test_x11_rounded_popup_mask_is_real_and_restored(app: QApplication, popup_type: str) -> None:
     if QApplication.platformName() != 'xcb':
         pytest.skip('Actual X11 window shape requires the xcb platform')
     ThemeManager.apply_theme('Glass')
@@ -214,14 +207,17 @@ def test_footer_keybind_help_is_flat_in_all_themes(
 def test_misc_and_proxy_help_buttons_are_flat_and_small(
     app: QApplication, config: manager.ConfigManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(replacer_config.SubplaceJoinerTab, '_resolve_current_user', _no_user_resolution)
     window = replacer_config.ReplacerConfigWindow(config)
     window.resize(950, 750)
     window.show()
     try:
         for _ in range(150):
             app.processEvents()
-            if all(window.tab_widget.isTabEnabled(i) for i in range(window.tab_widget.count())):
+            if all(
+                window.tab_widget.isTabEnabled(i)
+                for i in range(window.tab_widget.count())
+                if i != 1
+            ):
                 break
             QTest.qWait(10)
         tooltips = {
@@ -229,9 +225,7 @@ def test_misc_and_proxy_help_buttons_are_flat_and_small(
             replacer_config.tr('ui.gui.rando_stuff_tab.what_is_a_reserved_server'),
             replacer_config.tr('ui.gui.proxy_tab.about_this_tab'),
         }
-        buttons = [
-            btn for btn in window.findChildren(QPushButton) if btn.toolTip() in tooltips
-        ]
+        buttons = [btn for btn in window.findChildren(QPushButton) if btn.toolTip() in tooltips]
         assert len(buttons) == 3
         for theme in ('Dark', 'Glass', 'System'):
             ThemeManager.apply_theme(theme)

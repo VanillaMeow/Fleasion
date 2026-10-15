@@ -307,7 +307,6 @@ def linux_hosts_nix_snippet(details: ErrorDetails) -> str:
         'assetdelivery.roblox.com',
         'contentdelivery.roblox.com',
         'fts.rbxcdn.com',
-        'gamejoin.roblox.com',
     )
     hosts_value = details.get('hosts')
     raw_hosts = hosts_value if _is_object_list(hosts_value) else default_hosts
@@ -318,7 +317,6 @@ def linux_hosts_nix_snippet(details: ErrorDetails) -> str:
             'assetdelivery.roblox.com',
             'contentdelivery.roblox.com',
             'fts.rbxcdn.com',
-            'gamejoin.roblox.com',
         ]
 
     extra_hosts = '\n'.join(f'  127.0.0.1 {host}' for host in hosts)

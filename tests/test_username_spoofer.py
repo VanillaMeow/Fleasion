@@ -4,7 +4,6 @@ import sys
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 
 def _noop_log(*_args: object, **_kwargs: object) -> None:
@@ -80,84 +79,42 @@ class _Flow:
 
 
 class UsernameSpooferTests(unittest.TestCase):
-    def test_gamejoin_creator_spoof_sets_authenticated_user_as_user_creator(self) -> None:
+    def test_gamejoin_responses_are_unchanged_with_saved_creator_spoof_enabled(self) -> None:
         spoofer = UsernameSpoofer()
-        spoofer.set_runtime_state({'self_game_creator': True})
-        flow = _Flow(
-            'https://gamejoin.roblox.com/v1/join-game',
-            {
-                'joinScript': {
-                    'CreatorId': 123,
-                    'CreatorType': 'Group',
-                    'nested': {'creatorId': 456, 'creatorType': 'Group'},
-                }
-            },
-        )
-
-        with patch.object(UsernameSpoofer, '_fetch_authenticated_user_id', return_value=987):
-            spoofer.response(flow)
-
-        payload = json.loads(flow.response.content.decode('utf-8'))
-        self.assertEqual(payload['joinScript']['CreatorId'], 987)
-        self.assertEqual(payload['joinScript']['CreatorType'], 'User')
-        self.assertEqual(payload['joinScript']['nested']['creatorId'], 987)
-        self.assertEqual(payload['joinScript']['nested']['creatorType'], 'User')
-
-    def test_gamejoin_creator_spoof_preserves_creator_type_representation(self) -> None:
-        spoofer = UsernameSpoofer()
-        spoofer.set_runtime_state({'self_game_creator': True})
-        flow = _Flow(
-            'https://gamejoin.roblox.com/v1/join-game',
-            {
-                'engineNumber': {'CreatorId': 123, 'CreatorType': 1},
-                'engineEnumString': {'CreatorId': 123, 'CreatorType': 'Enum.CreatorType.Group'},
-                'joinScriptEnum': {'CreatorId': 123, 'CreatorTypeEnum': 'Group'},
-                'idOnly': {'CreatorId': 123},
-                'webNumber': {'creatorTargetId': 456, 'creatorType': 2},
-            },
-        )
-
-        with patch.object(UsernameSpoofer, '_fetch_authenticated_user_id', return_value=987):
-            spoofer.response(flow)
-
-        payload = json.loads(flow.response.content.decode('utf-8'))
-        self.assertEqual(payload['engineNumber']['CreatorId'], 987)
-        self.assertEqual(payload['engineNumber']['CreatorType'], 0)
-        self.assertEqual(payload['engineEnumString']['CreatorId'], 987)
-        self.assertEqual(payload['engineEnumString']['CreatorType'], 'Enum.CreatorType.User')
-        self.assertEqual(payload['joinScriptEnum']['CreatorId'], 987)
-        self.assertEqual(payload['joinScriptEnum']['CreatorTypeEnum'], 'User')
-        self.assertEqual(payload['idOnly']['CreatorId'], 987)
-        self.assertNotIn('CreatorType', payload['idOnly'])
-        self.assertEqual(payload['webNumber']['creatorTargetId'], 987)
-        self.assertEqual(payload['webNumber']['creatorType'], 1)
-
-    def test_gamejoin_creator_spoof_fetches_user_id_for_each_replacement(self) -> None:
-        spoofer = UsernameSpoofer()
-        spoofer.set_runtime_state({'self_game_creator': True})
-        flows = [
-            _Flow('https://gamejoin.roblox.com/v1/join-game', {'joinScript': {'CreatorId': 1}}),
-            _Flow(
-                'https://gamejoin.roblox.com/v1/join-game-instance',
-                {'joinScript': {'CreatorId': 2}},
-            ),
-        ]
-
-        with patch.object(
-            UsernameSpoofer, '_fetch_authenticated_user_id', side_effect=[111, 222]
-        ) as fetch:
-            for flow in flows:
+        spoofer.set_runtime_state({'save_settings': True, 'self_game_creator': True})
+        for endpoint in (
+            'join-game',
+            'join-game-instance',
+            'join-reserved-game',
+            'join-private-game',
+        ):
+            with self.subTest(endpoint=endpoint):
+                flow = _Flow(
+                    f'https://gamejoin.roblox.com/v1/{endpoint}',
+                    {'joinScript': {'CreatorId': 123, 'CreatorType': 'Group'}},
+                )
+                original = flow.response.content
+                spoofer.request(flow)
                 spoofer.response(flow)
+                self.assertEqual(flow.response.content, original)
 
-        self.assertEqual(fetch.call_count, 2)
-        self.assertEqual(json.loads(flows[0].response.content)['joinScript']['CreatorId'], 111)
-        self.assertEqual(json.loads(flows[1].response.content)['joinScript']['CreatorId'], 222)
-
-    def test_game_creator_spoof_counts_as_enabled(self) -> None:
+    def test_game_creator_spoof_does_not_enable_interception(self) -> None:
         spoofer = UsernameSpoofer()
-
         spoofer.set_runtime_state({'self_game_creator': True})
+        self.assertFalse(spoofer.is_enabled())
 
+    def test_profile_spoof_still_works_with_saved_creator_spoof(self) -> None:
+        spoofer = UsernameSpoofer()
+        spoofer.set_runtime_state(
+            {'self_game_creator': True, 'others_apply_ingame': True, 'others_name': 'Example'}
+        )
+        flow = _Flow(
+            'https://apis.roblox.com/v1/user/profiles/get-profiles',
+            {'profileDetails': [{'userId': 123, 'names': {'username': 'Original'}}]},
+        )
+        spoofer.response(flow)
+        payload = json.loads(flow.response.content)
+        self.assertEqual(payload['profileDetails'][0]['names']['username'], 'Example')
         self.assertTrue(spoofer.is_enabled())
 
 

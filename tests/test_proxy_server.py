@@ -958,5 +958,106 @@ def test_explicit_proxy_excludes_pinned_bootstrap_hosts_from_intercept_all(tmp_p
     assert not _should_intercept(proxy, 'sober.vinegarhq.org', 80)
 
 
+@pytest.mark.parametrize('intercept_all', [False, True])
+def test_gamejoin_always_bypasses_tls_interception(tmp_path: Path, intercept_all: bool) -> None:
+    ca_cert, ca_key = generate_ca(tmp_path)
+    default_cert = generate_multi_host_cert(
+        'default', {ASSET_DELIVERY_HOST}, ca_cert, ca_key, tmp_path
+    )
+    proxy = FleasionProxy(
+        texture_stripper=_texture_stub(),
+        cache_scraper=_cache_stub(enabled=False),
+        host_certs={},
+        default_cert=default_cert,
+        upstream_endpoints={},
+        explicit_proxy=True,
+        intercept_hosts={'gamejoin.roblox.com', ASSET_DELIVERY_HOST},
+        intercept_all_hosts=intercept_all,
+        ca_cert_path=ca_cert,
+        ca_key_path=ca_key,
+        cert_cache_dir=tmp_path,
+    )
+    proxy.set_intercept_excluded_hosts(())
+    for host in ('gamejoin.roblox.com', 'GAMEJOIN.ROBLOX.COM.'):
+        assert not _should_intercept(proxy, host, 443)
+        assert _host_context(proxy, host) is None
+        assert (
+            asyncio.run(proxy.replay_request(1, b'POST /v1/join-game HTTP/1.1\r\n\r\n', host))
+            is None
+        )
+    assert _should_intercept(proxy, ASSET_DELIVERY_HOST, 443)
+    asyncio.run(proxy.stop())
+
+
+def test_gamejoin_connect_tunnels_opaque_bytes_with_intercept_all_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ca_cert, ca_key = generate_ca(tmp_path)
+    default_cert = generate_multi_host_cert(
+        'default', {ASSET_DELIVERY_HOST}, ca_cert, ca_key, tmp_path
+    )
+    proxy = FleasionProxy(
+        texture_stripper=_texture_stub(),
+        cache_scraper=_cache_stub(enabled=False),
+        host_certs={},
+        default_cert=default_cert,
+        upstream_endpoints={},
+        explicit_proxy=True,
+        intercept_all_hosts=True,
+        port=0,
+    )
+    opaque = b'\x16\x03\x03opaque Roblox TLS payload'
+
+    async def run_test() -> None:
+        received: list[bytes] = []
+
+        async def echo(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            try:
+                payload = await reader.readexactly(len(opaque))
+                received.append(payload)
+                writer.write(payload)
+                await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        upstream = await asyncio.start_server(echo, '127.0.0.1', 0)
+
+        async def connect(host: str, port: int) -> UpstreamConnectResult:
+            assert host == 'gamejoin.roblox.com'
+            assert port == 443
+            reader, writer = await asyncio.open_connection('127.0.0.1', _server_port(upstream))
+            return UpstreamConnectResult(
+                reader=reader, writer=writer, method='direct', endpoint='test'
+            )
+
+        monkeypatch.setattr(proxy_server, '_open_explicit_proxy_tunnel', connect)
+        await proxy.start()
+        reader, writer = await asyncio.open_connection('127.0.0.1', proxy.port)
+        try:
+            writer.write(
+                b'CONNECT gamejoin.roblox.com:443 HTTP/1.1\r\nHost: gamejoin.roblox.com:443\r\n\r\n'
+            )
+            await writer.drain()
+            reply = await asyncio.wait_for(reader.readuntil(b'\r\n\r\n'), 2)
+            assert reply.startswith(b'HTTP/1.1 200')
+            writer.write(opaque)
+            await writer.drain()
+            assert await asyncio.wait_for(reader.readexactly(len(opaque)), 2) == opaque
+            assert received == [opaque]
+            entries = proxy.get_request_log()
+            assert len(entries) == 1
+            assert entries[0]['intercepted'] is False
+            assert not entries[0].get('request_raw')
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            await proxy.stop()
+            upstream.close()
+            await upstream.wait_closed()
+
+    asyncio.run(run_test())
+
+
 if __name__ == '__main__':
     unittest.main()

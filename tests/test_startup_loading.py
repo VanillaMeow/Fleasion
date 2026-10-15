@@ -63,7 +63,7 @@ class RecordingTab(QWidget):
 
 def _record_tabs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     created: list[str] = []
-    for name in ('RandoStuffTab', 'SubplaceJoinerTab', 'ProxyTrafficTab', 'SettingsTab'):
+    for name in ('RandoStuffTab', 'ProxyTrafficTab', 'SettingsTab'):
 
         def create(*args: object, tab_name: str = name, **kwargs: object) -> RecordingTab:
             created.append(tab_name)
@@ -92,16 +92,18 @@ def test_dashboard_paints_before_preloading_and_switching_never_constructs_tabs(
         window.show()
         for _ in range(100):
             app.processEvents()
-            if all(window.tab_widget.isTabEnabled(i) for i in range(5)):
+            if all(window.tab_widget.isTabEnabled(i) for i in (0, 2, 3, 4)):
                 break
             QTest.qWait(5)
+        assert not window.tab_widget.isTabEnabled(1)
+        assert window.tab_widget.tabToolTip(1) == dashboard_module.tr('proxy.gamejoin_disabled')
         assert at_paint == [[]]
-        assert len(created) == 4
-        assert all(window.tab_widget.isTabEnabled(i) for i in range(5))
+        assert len(created) == 3
+        assert all(window.tab_widget.isTabEnabled(i) for i in (0, 2, 3, 4))
         for index in range(5):
             window.tab_widget.setCurrentIndex(index)
             app.processEvents()
-        assert len(created) == 4
+        assert len(created) == 3
     finally:
         window.close()
 
@@ -312,7 +314,7 @@ def test_gui_import_defers_heavy_preview_dependencies() -> None:
     import subprocess
     import sys
 
-    code = '''
+    code = """
 import sys
 import fleasion.gui
 
@@ -324,7 +326,7 @@ deferred_modules = {
 }
 loaded = deferred_modules.intersection(sys.modules)
 assert not loaded, f'GUI import loaded deferred dependencies: {sorted(loaded)}'
-'''
+"""
     result = subprocess.run(
         [sys.executable, '-c', code],
         capture_output=True,

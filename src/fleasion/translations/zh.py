@@ -677,6 +677,7 @@ CHINESE: dict[str, str] = {
     'proxy.table.status': '状态',
     'proxy.table.time': '时间',
     'proxy.tunnel_note': '无可用预览 — 此连接经过隧道传输（不透明 TLS），未被解密。',
+    'proxy.gamejoin_disabled': 'Roblox 更新后，Gamejoin 功能已禁用。Fleasion 不再拦截 Gamejoin 请求。',
     'proxy_gate.disabled_message': '此部分已关闭，因为代理已在设置中禁用。',
     'rando.account.add_title': '添加账户',
     'rando.account.change_cookie_title': '更改 Cookie',

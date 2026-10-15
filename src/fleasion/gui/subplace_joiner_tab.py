@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import json
-import secrets
 import sys
 import threading
 import time
 import traceback
-import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, NotRequired, Protocol, TypedDict, cast, override
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 
 import requests
 from dateutil import parser as _dateutil_parser
@@ -38,11 +36,9 @@ from PySide6.QtWidgets import (
 )
 
 from fleasion.localization import tr, tr_count
-from fleasion.utils.json_types import require_object_dict
 from fleasion.utils.logging import log_buffer
 from fleasion.utils.paths import CONFIG_DIR, PROXY_CA_DIR
 from fleasion.utils.roblox_auth import (
-    get_roblosecurity as _get_roblosecurity,
     wait_for_roblosecurity as _wait_for_roblosecurity,
 )
 from fleasion.utils.windows import launch_as_standard_user
@@ -1885,73 +1881,8 @@ class SubplaceJoinerTab(QWidget):
     def _join_place(
         self, place_id: int | str, root_place_id: int | str | None = None, job_id: str = ''
     ) -> None:
-        self._current_job_id = job_id
-        log_buffer.log(
-            'subplace',
-            f'Joining place ID: {place_id}' + (f' with jobId: {job_id}' if job_id else ''),
-        )
-        cookie = _get_roblosecurity()
-        if root_place_id and int(place_id) != int(root_place_id):
-            ok = self._join_root(root_place_id, cookie)
-            log_buffer.log(
-                'subplace',
-                f'Pre-seed join {"succeeded" if ok else "failed"} for root {root_place_id}',
-            )
-        if (
-            self._rando_tab is not None
-            and self._rando_tab.is_multi_instance_enabled()
-            and self._rando_tab.account_switched
-        ):
-            from fleasion.utils.windows import is_roblox_running
-
-            if is_roblox_running():
-                log_buffer.log(
-                    'subplace',
-                    'Account switched + multi-instance on — launching new Roblox instance then joining',
-                )
-                self._rando_tab.close_singleton_event()
-                self.joining_place = True
-
-                def _launch_with_uri(
-                    place_id: int | str = place_id, cookie: str | None = cookie
-                ) -> None:
-                    from .rando_stuff_tab import get_auth_ticket
-
-                    ticket = get_auth_ticket(cookie) if cookie else None
-                    if not ticket:
-                        log_buffer.log(
-                            'subplace',
-                            'Failed to get auth ticket for multi-instance join',
-                        )
-                        return
-                    tracker_id = 10_000_000_000 + secrets.randbelow(90_000_000_000)
-                    place_launcher_url = (
-                        f'https://www.roblox.com/Game/PlaceLauncher.ashx'
-                        f'?request=RequestGame'
-                        f'&browserTrackerId={tracker_id}'
-                        f'&placeId={place_id}'
-                        f'&isPlayTogetherGame=false'
-                    )
-                    roblox_player_uri = (
-                        f'roblox-player:1+launchmode:play+gameinfo:{ticket}'
-                        f'+launchtime:{int(time.time() * 1000)}'
-                        f'+placelauncherurl:{quote(place_launcher_url, safe="")}'
-                        f'+browsertrackerid:{tracker_id}+robloxLocale:en_us+gameLocale:en_us'
-                        f'+channel:+LaunchExp:InApp'
-                    )
-                    log_buffer.log(
-                        'subplace',
-                        f'Launching Roblox URI to placeId={place_id} (multi-instance)',
-                    )
-                    if not self._launch_roblox_uri(roblox_player_uri):
-                        log_buffer.log('subplace', 'Failed to launch Roblox URI without elevation')
-
-                threading.Thread(target=_launch_with_uri, daemon=True).start()
-                return
-        self.joining_place = True
-        log_buffer.log('subplace', f'Launching Roblox deeplink to placeId={place_id}')
-        if not self._launch_roblox_uri(f'roblox://experiences/start?placeId={place_id}'):
-            log_buffer.log('subplace', 'Failed to launch Roblox deeplink without elevation')
+        del place_id, root_place_id, job_id
+        log_buffer.log('subplace', tr('proxy.gamejoin_disabled'))
 
     def _launch_roblox_uri(self, target: str) -> bool:
         """Launch a join URI using the active platform proxy strategy."""
@@ -1969,35 +1900,9 @@ class SubplaceJoinerTab(QWidget):
             return relaunch_roblox_with_proxy_env(self._proxy_master.roblox_env_proxy_url(), target)
         return launch_as_standard_user(target)
 
-    def _post_root_join(self, root_place_id: int | str, cookie: str) -> requests.Response:
-        sess = self._new_session(cookie)
-        payload = {
-            'placeId': int(root_place_id),
-            'isTeleport': True,
-            'isImmersiveAdsTeleport': False,
-            'gameJoinAttemptId': str(uuid.uuid4()),
-        }
-        join_url = 'https://gamejoin.roblox.com/v1/join-game'
-        return sess.post(
-            join_url,
-            json=payload,
-            timeout=15,
-            verify=self._request_verify(join_url),
-        )
-
     def _join_root(self, root_place_id: int | str, cookie: str | None = None) -> bool:
-        resolved_cookie = cookie if cookie is not None else _get_roblosecurity()
-        if not resolved_cookie:
-            return False
-        try:
-            response = self._post_root_join(root_place_id, resolved_cookie)
-            payload: object = response.json() if response.status_code == 200 else None
-        except (requests.RequestException, TypeError, ValueError) as exc:
-            log_buffer.log('subplace', f'Pre-seed join error: {exc}')
-            return False
-        if not isinstance(payload, dict):
-            return False
-        return cast('dict[str, object]', payload).get('status') == 2
+        del root_place_id, cookie
+        return False
 
     def _new_session(self, cookie: str | None) -> requests.Session:
         sess = requests.Session()
@@ -2071,50 +1976,8 @@ class SubplaceJoinerTab(QWidget):
 
         self._on_main(wrapped)
 
-    # Proxy interceptor hooks (called by ProxyMaster on gamejoin traffic)
-
     def request(self, flow: ProxyFlow) -> None:
-        url = flow.request.pretty_url
-        parsed_url = urlparse(url)
-        content_type = flow.request.headers.get('Content-Type', '').lower()
-
-        if (
-            self.joining_place
-            and any(p == parsed_url.path for p in self._WANTED_ENDPOINTS)
-            and 'gamejoin.roblox.com' in url
-            and 'application/json' in content_type
-        ):
-            try:
-                parsed_body = json.loads(flow.request.content)
-            except json.JSONDecodeError, UnicodeDecodeError, TypeError:
-                return
-            if not isinstance(parsed_body, dict):
-                return
-            body_json = cast('dict[str, object]', parsed_body)
-            if 'isTeleport' not in body_json:
-                body_json['isTeleport'] = True
-                log_buffer.log('subplace', 'Added isTeleport flag')
-            job_id = self._current_job_id
-            if job_id:
-                body_json['gameId'] = job_id
-                flow.request.url = 'https://gamejoin.roblox.com/v1/join-game-instance'
-                log_buffer.log(
-                    'subplace',
-                    f'Redirecting to join-game-instance with jobId: {job_id}',
-                )
-            new_body = json.dumps(body_json, separators=(',', ':')).encode()
-            flow.request.raw_content = new_body
+        del flow
 
     def response(self, flow: ProxyFlow) -> None:
-        url = flow.request.pretty_url
-        parsed_url = urlparse(url)
-
-        if self.joining_place and any(p == parsed_url.path for p in self._WANTED_ENDPOINTS):
-            if flow.response is None:
-                return
-            try:
-                data = require_object_dict(flow.response.json())
-            except TypeError, ValueError:
-                return
-            if data.get('status') == 2:
-                self.joining_place = False
+        del flow

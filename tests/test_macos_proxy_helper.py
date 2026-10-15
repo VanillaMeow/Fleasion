@@ -153,12 +153,12 @@ def test_helper_only_manages_allowlisted_fleasion_hosts(
 ) -> None:
     hosts_file, _ = _reset_daemon_state(tmp_path, monkeypatch)
 
-    _set_hosts({'assetdelivery.roblox.com', 'gamejoin.roblox.com'})
+    _set_hosts({'assetdelivery.roblox.com', 'contentdelivery.roblox.com'})
     content = hosts_file.read_text(encoding='utf-8')
 
     assert '10.0.0.1 custom.example' in content
     assert '127.0.0.1 assetdelivery.roblox.com # Fleasion proxy entry' in content
-    assert '127.0.0.1 gamejoin.roblox.com # Fleasion proxy entry' in content
+    assert '127.0.0.1 contentdelivery.roblox.com # Fleasion proxy entry' in content
 
     _set_hosts([])
     cleaned = hosts_file.read_text(encoding='utf-8')
@@ -383,12 +383,10 @@ def test_helper_installer_stages_helper_before_privileged_install(
     assert f'launchctl kill SIGKILL system/{macos_proxy_helper.HELPER_ID}' in script
     assert 'could not unload existing helper service' in script
     assert (
-        f'lsof -nP -iTCP:{macos_proxy_helper.MACOS_PROXY_HELPER_CONTROL_PORT} '
-        '-sTCP:LISTEN'
+        f'lsof -nP -iTCP:{macos_proxy_helper.MACOS_PROXY_HELPER_CONTROL_PORT} -sTCP:LISTEN'
     ) in script
     assert (
-        f'lsof -nP -t -iTCP:{macos_proxy_helper.MACOS_PROXY_HELPER_CONTROL_PORT} '
-        '-sTCP:LISTEN'
+        f'lsof -nP -t -iTCP:{macos_proxy_helper.MACOS_PROXY_HELPER_CONTROL_PORT} -sTCP:LISTEN'
     ) in script
     assert 'lsof -a -p' in script
     assert '$listener_pid' in script
@@ -774,3 +772,17 @@ def test_helper_probe_backend_preserves_control_error(monkeypatch: pytest.Monkey
     assert response['reachable'] is False
     assert response['error_type'] == 'ConnectionRefusedError'
     assert response['errno'] == 61
+
+
+def test_helper_cleans_legacy_gamejoin_routes_without_readding_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hosts_file, _ = _reset_daemon_state(tmp_path, monkeypatch)
+    hosts_file.write_text(
+        '127.0.0.1 localhost\n127.0.0.1 gamejoin.roblox.com\n::1 gamejoin.roblox.com\n',
+        encoding='utf-8',
+    )
+    _set_hosts({'assetdelivery.roblox.com'})
+    assert 'gamejoin.roblox.com' not in hosts_file.read_text(encoding='utf-8')
+    with pytest.raises(ValueError, match='allowlist'):
+        _set_hosts({'gamejoin.roblox.com'})

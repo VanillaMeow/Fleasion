@@ -99,14 +99,6 @@ def _extract_job_id(raw: str) -> str:
     return callback(raw)
 
 
-def _preseed_root_place_for_subplace(root_place_id: str, cookie: str) -> bool:
-    callback = cast(
-        'Callable[[str, str], bool]',
-        rando_stuff_tab.__dict__['_preseed_root_place_for_subplace'],
-    )
-    return callback(root_place_id, cookie)
-
-
 def _rewrite_sober_cookie_header_callable() -> Callable[[str, str], str]:
     return cast(
         'Callable[[str, str], str]',
@@ -189,14 +181,6 @@ def _record_launch(targets: list[str]) -> Callable[[str], bool]:
     return launch
 
 
-def _record_preseed(records: list[tuple[str, str]]) -> Callable[[str, str], bool]:
-    def preseed(root_place_id: str, cookie: str) -> bool:
-        records.append((root_place_id, cookie))
-        return True
-
-    return preseed
-
-
 def _access_code(_place_id: str, _link_code: str, _cookie: str) -> str:
     return 'access-123'
 
@@ -248,21 +232,6 @@ class _FakeFlowResponse:
         self.status_code = status_code
         self.headers: dict[str, str] = {}
         self.content = json.dumps(body).encode('utf-8')
-
-
-class _FakeResponse:
-    def __init__(
-        self,
-        status_code: int = 200,
-        headers: dict[str, str] | None = None,
-        data: JsonObject | None = None,
-    ) -> None:
-        self.status_code = status_code
-        self.headers = headers or {}
-        self._data = data or {}
-
-    def json(self) -> JsonObject:
-        return self._data
 
 
 def _account_manager_owner() -> rando_stuff_tab.RandoStuffTab:
@@ -417,49 +386,42 @@ def test_extract_job_id_ignores_roblox_launcher_fragments() -> None:
     )
 
 
-def test_account_launch_preseeds_root_for_distinct_subplace(
+def test_account_launch_ignores_disabled_subplace_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     owner = _account_manager_owner()
     launched: list[str] = []
-    preseeded: list[tuple[str, str]] = []
 
     monkeypatch.setattr(rando_stuff_tab, '_find_roblox_exe', _find_fake_roblox_exe)
     monkeypatch.setattr(rando_stuff_tab, 'get_auth_ticket', _cookie_ticket)
     monkeypatch.setattr(rando_stuff_tab, 'launch_as_standard_user', _record_launch(launched))
     monkeypatch.setattr(
-        rando_stuff_tab,
-        '_preseed_root_place_for_subplace',
-        _record_preseed(preseeded),
+        _requests_module(), 'Session', lambda: pytest.fail('Unexpected join network request')
     )
 
     _owner_launch_account_thread(
         owner, 'cookie-secret', 'GullibleProkiller1', '537413528', '', '1930863474'
     )
 
-    assert preseeded == [('537413528', 'cookie-secret')]
-    assert cast('str | None', owner.__dict__['_account_manager_teleport_place_id']) == '1930863474'
+    assert owner.__dict__.get('_account_manager_teleport_place_id') is None
     assert len(launched) == 1
     decoded = unquote(launched[0])
     assert 'request=RequestGame' in decoded
-    assert 'placeId=1930863474' in decoded
+    assert 'placeId=537413528' in decoded
 
 
-def test_account_private_server_subplace_launch_preserves_private_game_uri(
+def test_account_private_server_launch_ignores_disabled_subplace_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     owner = _account_manager_owner()
     launched: list[str] = []
-    preseeded: list[tuple[str, str]] = []
 
     monkeypatch.setattr(rando_stuff_tab, '_find_roblox_exe', _find_fake_roblox_exe)
     monkeypatch.setattr(rando_stuff_tab, 'get_auth_ticket', _cookie_ticket)
     monkeypatch.setattr(rando_stuff_tab, '_get_access_code', _access_code)
     monkeypatch.setattr(rando_stuff_tab, 'launch_as_standard_user', _record_launch(launched))
     monkeypatch.setattr(
-        rando_stuff_tab,
-        '_preseed_root_place_for_subplace',
-        _record_preseed(preseeded),
+        _requests_module(), 'Session', lambda: pytest.fail('Unexpected join network request')
     )
 
     _owner_launch_account_thread(
@@ -471,12 +433,11 @@ def test_account_private_server_subplace_launch_preserves_private_game_uri(
         '1930863474',
     )
 
-    assert preseeded == [('537413528', 'cookie-secret')]
-    assert cast('str | None', owner.__dict__['_account_manager_teleport_place_id']) == '1930863474'
+    assert owner.__dict__.get('_account_manager_teleport_place_id') is None
     assert len(launched) == 1
     decoded = unquote(launched[0])
     assert 'request=RequestPrivateGame' in decoded
-    assert 'placeId=1930863474' in decoded
+    assert 'placeId=537413528' in decoded
     assert 'accessCode=access-123' in decoded
     assert 'linkCode=link-123' in decoded
 
@@ -945,135 +906,27 @@ def test_linux_switch_account_explains_libsecret_and_does_not_select_account(
     ]
 
 
-def test_account_subplace_root_preseed_disables_proxy_cert_verification(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FakeSession:
-        def __init__(self) -> None:
-            self.trust_env: bool = True
-            self.proxies: dict[str, str] = {'https': 'proxy'}
-            self.verify: bool = True
-            self.headers: dict[str, str] = {}
-            self.posts: list[tuple[str, dict[str, object]]] = []
-            sessions.append(self)
-
-        def post(self, url: str, **kwargs: object) -> _FakeResponse:
-            self.posts.append((url, kwargs))
-            if url == 'https://auth.roblox.com/v2/logout':
-                return _FakeResponse(status_code=403, headers={'x-csrf-token': 'csrf'})
-            return _FakeResponse(status_code=200, data={'status': 2})
-
-    sessions: list[FakeSession] = []
-    monkeypatch.setattr(_requests_module(), 'Session', FakeSession)
-
-    assert _preseed_root_place_for_subplace('537413528', 'cookie-secret')
-
-    assert len(sessions) == 1
-    assert sessions[0].trust_env is False
-    assert sessions[0].proxies == {}
-    assert sessions[0].verify is False
-    assert sessions[0].headers['X-CSRF-TOKEN'] == 'csrf'
-    post_json = cast('JsonObject', sessions[0].posts[1][1]['json'])
-    assert post_json['placeId'] == 537413528
-    assert post_json['isTeleport'] is True
-
-
-def test_account_proxy_marks_distinct_subplace_launch_as_teleport() -> None:
-    owner = _account_manager_owner()
-    owner.__dict__['_account_manager_teleport_place_id'] = '1930863474'
-    flow = _FakeFlow(
-        'https://gamejoin.roblox.com/v1/join-game',
-        {'placeId': 1930863474, 'gameJoinAttemptId': 'join-1'},
-    )
-
-    owner.request(_as_proxy_flow(flow))
-
-    body = cast('JsonObject', json.loads(flow.request.content))
-    assert body['placeId'] == 1930863474
-    assert body['isTeleport'] is True
-
-
-def test_account_proxy_marks_private_server_subplace_launch_as_teleport() -> None:
-    owner = _account_manager_owner()
-    owner.__dict__['_account_manager_teleport_place_id'] = '1930863474'
-    flow = _FakeFlow(
-        'https://gamejoin.roblox.com/v1/join-private-game',
-        {
-            'placeId': 1930863474,
-            'accessCode': 'access-123',
-            'gameJoinAttemptId': 'join-1',
-        },
-    )
-
-    owner.request(_as_proxy_flow(flow))
-
-    body = cast('JsonObject', json.loads(flow.request.content))
-    assert body['placeId'] == 1930863474
-    assert body['accessCode'] == 'access-123'
-    assert body['isTeleport'] is True
-
-    flow.response = _FakeFlowResponse(
-        {
-            'jobId': 'JoinPrivateGame:PlaceId=1930863474&AccessCode=access-123&LinkCode=link-123',
-            'status': 0,
-        }
-    )
-    owner.response(_as_proxy_flow(flow))
-
-    assert cast('str | None', owner.__dict__['_account_manager_teleport_place_id']) == '1930863474'
-
-    retry_flow = _FakeFlow(
-        'https://gamejoin.roblox.com/v1/join-private-game',
-        {
-            'placeId': 1930863474,
-            'accessCode': 'access-123',
-            'gameJoinAttemptId': 'join-1',
-        },
-    )
-
-    owner.request(_as_proxy_flow(retry_flow))
-
-    retry_body = cast('JsonObject', json.loads(retry_flow.request.content))
-    assert retry_body['isTeleport'] is True
-
-    retry_flow.response = _FakeFlowResponse(
-        {
-            'jobId': '00000000-0000-0000-0000-000000000001',
-            'status': 2,
-        }
-    )
-    owner.response(_as_proxy_flow(retry_flow))
-
-    assert owner.__dict__['_account_manager_teleport_place_id'] is None
-
-
-def test_account_proxy_does_not_mark_nonmatching_place_as_teleport() -> None:
-    owner = _account_manager_owner()
-    owner.__dict__['_account_manager_teleport_place_id'] = '1930863474'
-    flow = _FakeFlow(
-        'https://gamejoin.roblox.com/v1/join-game',
-        {'placeId': 537413528, 'gameJoinAttemptId': 'join-1'},
-    )
-
-    owner.request(_as_proxy_flow(flow))
-
-    body = cast('JsonObject', json.loads(flow.request.content))
-    assert 'isTeleport' not in body
-
-
-def test_account_proxy_preserves_teleport_when_redirecting_job_id() -> None:
+@pytest.mark.parametrize(
+    'endpoint', ['join-game', 'join-game-instance', 'join-private-game', 'join-reserved-game']
+)
+def test_account_proxy_leaves_gamejoin_unchanged_with_stale_feature_state(endpoint: str) -> None:
     owner = _account_manager_owner()
     owner.__dict__['_account_manager_teleport_place_id'] = '1930863474'
     owner.__dict__['_account_manager_job_id'] = '00000000-0000-0000-0000-000000000001'
+    owner.__dict__['_subplace_blacklisted_ids'] = {'1930863474'}
+    owner.__dict__['_doing_rejoin'] = True
     flow = _FakeFlow(
-        'https://gamejoin.roblox.com/v1/join-game',
-        {'placeId': '1930863474', 'gameJoinAttemptId': 'join-1'},
+        f'https://gamejoin.roblox.com/v1/{endpoint}',
+        {'placeId': '1930863474', 'gameJoinAttemptId': 'join-1', 'accessCode': 'access-123'},
     )
+    flow.response = _FakeFlowResponse({'status': 2, 'jobId': 'job-123'})
+    request_body = flow.request.content
+    response_body = flow.response.content
+    url = flow.request.url
 
     owner.request(_as_proxy_flow(flow))
+    owner.response(_as_proxy_flow(flow))
 
-    body = cast('JsonObject', json.loads(flow.request.content))
-    assert flow.request.url == 'https://gamejoin.roblox.com/v1/join-game-instance'
-    assert body['gameId'] == '00000000-0000-0000-0000-000000000001'
-    assert body['isTeleport'] is True
-    assert owner.__dict__['_account_manager_job_id'] == ''
+    assert flow.request.url == url
+    assert flow.request.content == request_body
+    assert flow.response.content == response_body

@@ -677,6 +677,7 @@ FILIPINO: dict[str, str] = {
     'proxy.table.status': 'Katayuan',
     'proxy.table.time': 'Oras',
     'proxy.tunnel_note': 'Walang available na preview — dumaan ang koneksiyong ito sa tunnel (opaque TLS), hindi ito na-decrypt.',
+    'proxy.gamejoin_disabled': 'Hindi pinagana ang mga tampok ng Gamejoin matapos ang isang update ng Roblox. Hindi na hinaharang ng Fleasion ang mga kahilingan ng Gamejoin.',
     'proxy_gate.disabled_message': 'Sarado ang seksiyong ito dahil naka-disable ang proxy sa Mga Setting.',
     'rando.account.add_title': 'Magdagdag ng Account',
     'rando.account.change_cookie_title': 'Palitan ang Cookie',

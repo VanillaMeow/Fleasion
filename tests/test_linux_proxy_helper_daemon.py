@@ -505,9 +505,11 @@ def test_read_hosts_update_rejects_non_allowlisted_hosts(tmp_path: Path) -> None
 
 def test_read_hosts_update_accepts_allowlisted_hosts(tmp_path: Path) -> None:
     hosts_file = tmp_path / 'hosts.json'
-    hosts_file.write_text('{"hosts":["apis.roblox.com","gamejoin.roblox.com"]}', encoding='utf-8')
+    hosts_file.write_text(
+        '{"hosts":["apis.roblox.com","assetdelivery.roblox.com"]}', encoding='utf-8'
+    )
 
-    assert _read_hosts_update(hosts_file) == {'apis.roblox.com', 'gamejoin.roblox.com'}
+    assert _read_hosts_update(hosts_file) == {'apis.roblox.com', 'assetdelivery.roblox.com'}
 
 
 def test_apply_hosts_continues_when_read_only_hosts_already_has_entries(
@@ -515,7 +517,7 @@ def test_apply_hosts_continues_when_read_only_hosts_already_has_entries(
 ) -> None:
     hosts_file = tmp_path / 'hosts'
     hosts_file.write_text(
-        '127.0.0.1 assetdelivery.roblox.com\n127.0.0.1 gamejoin.roblox.com\n',
+        '127.0.0.1 assetdelivery.roblox.com\n127.0.0.1 contentdelivery.roblox.com\n',
         encoding='utf-8',
     )
 
@@ -531,7 +533,7 @@ def test_apply_hosts_continues_when_read_only_hosts_already_has_entries(
         _apply_hosts_or_use_existing_read_only(
             {
                 'assetdelivery.roblox.com',
-                'gamejoin.roblox.com',
+                'contentdelivery.roblox.com',
             }
         )
         is True
@@ -556,7 +558,7 @@ def test_apply_hosts_raises_when_read_only_hosts_is_missing_entries(
         _apply_hosts_or_use_existing_read_only(
             {
                 'assetdelivery.roblox.com',
-                'gamejoin.roblox.com',
+                'contentdelivery.roblox.com',
             }
         )
     except OSError as exc:
@@ -725,3 +727,37 @@ def test_repair_sober_cert_ownership_repairs_only_user_home_paths(
     assert (cert.parent.parent, 1000, 1000, False) in chowned
     assert (cert.parent, 1000, 1000, False) in chowned
     assert (cert, 1000, 1000, False) in chowned
+
+
+def test_hosts_update_rejects_retired_gamejoin_route(tmp_path: Path) -> None:
+    hosts_file = tmp_path / 'hosts.json'
+    hosts_file.write_text('{"hosts":["gamejoin.roblox.com"]}', encoding='utf-8')
+    try:
+        _read_hosts_update(hosts_file)
+    except RuntimeError as exc:
+        assert 'unsupported hosts requested: gamejoin.roblox.com' in str(exc)
+    else:
+        raise AssertionError('Retired gamejoin route was accepted')
+
+
+def test_read_only_hosts_rejects_legacy_gamejoin_redirect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hosts_file = tmp_path / 'hosts'
+    hosts_file.write_text(
+        '127.0.0.1 assetdelivery.roblox.com\n::1 gamejoin.roblox.com\n', encoding='utf-8'
+    )
+
+    def fail_apply(_hosts: object) -> Never:
+        raise OSError(errno.EROFS, 'Read-only file system', str(hosts_file))
+
+    monkeypatch.setattr(daemon, 'HOSTS_FILE', hosts_file)
+    monkeypatch.setattr(daemon, '_clear_hosts', _noop)
+    monkeypatch.setattr(daemon, '_install_boot_guard', lambda: False)
+    monkeypatch.setattr(daemon, '_apply_hosts', fail_apply)
+    try:
+        _apply_hosts_or_use_existing_read_only({'assetdelivery.roblox.com'})
+    except OSError as exc:
+        assert exc.errno == errno.EROFS
+    else:
+        raise AssertionError('Legacy gamejoin redirect was left active')

@@ -677,6 +677,7 @@ DUTCH: dict[str, str] = {
     'proxy.table.status': 'Status',
     'proxy.table.time': 'Tijd',
     'proxy.tunnel_note': 'Geen voorbeeld beschikbaar: deze verbinding liep door een tunnel (ondoorzichtige TLS) en werd niet ontsleuteld.',
+    'proxy.gamejoin_disabled': 'Gamejoin-functies zijn uitgeschakeld na een Roblox-update. Fleasion onderschept geen Gamejoin-verzoeken meer.',
     'proxy_gate.disabled_message': 'Dit onderdeel is gesloten omdat de proxy is uitgeschakeld in Instellingen.',
     'rando.account.add_title': 'Account toevoegen',
     'rando.account.change_cookie_title': 'Cookie wijzigen',

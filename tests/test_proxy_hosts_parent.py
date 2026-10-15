@@ -57,17 +57,18 @@ def test_proxy_master_reports_only_active_managed_hosts_intercepts() -> None:
     state['_lock'] = threading.Lock()
     state['_running'] = True
     state['_hosts_installed'] = True
-    state['_active_intercept_hosts'] = {'gamejoin.roblox.com'}
+    state['_active_intercept_hosts'] = {'assetdelivery.roblox.com'}
 
-    assert proxy.hosts_intercepts_host('GAMEJOIN.ROBLOX.COM.')
+    assert proxy.hosts_intercepts_host('ASSETDELIVERY.ROBLOX.COM.')
     assert not proxy.hosts_intercepts_host('apis.roblox.com')
+    assert not proxy.hosts_intercepts_host('gamejoin.roblox.com')
 
     state['_hosts_installed'] = False
-    assert not proxy.hosts_intercepts_host('gamejoin.roblox.com')
+    assert not proxy.hosts_intercepts_host('assetdelivery.roblox.com')
 
     state['_hosts_installed'] = True
     state['_running'] = False
-    assert not proxy.hosts_intercepts_host('gamejoin.roblox.com')
+    assert not proxy.hosts_intercepts_host('assetdelivery.roblox.com')
 
 
 def test_windows_hosts_writer_creates_missing_immediate_parent(
@@ -122,7 +123,7 @@ def test_hosts_cleanup_removes_ipv4_and_ipv6_loopback_entries(
     monkeypatch.setattr(proxy_master, 'HOSTS_FILE', hosts_file)
     monkeypatch.setattr(proxy_master, 'IS_MACOS', False)
 
-    assert _remove_hosts_entries({'assetdelivery.roblox.com', 'gamejoin.roblox.com'})
+    assert _remove_hosts_entries({'assetdelivery.roblox.com'})
     content = hosts_file.read_text(encoding='utf-8')
 
     assert 'assetdelivery.roblox.com' not in content
@@ -338,3 +339,24 @@ def test_candidate_hosts_overflow_is_not_reported_as_repairable_oversized_file(
     details: ErrorDetails = {}
     assert not _add_hosts_entries({'assetdelivery.roblox.com'}, details)
     assert details['error_code'] == 'hosts_entries_would_exceed_limit'
+
+
+@pytest.mark.parametrize('mode', ['full', 'a', 'b', 'c', 'd', 'e'])
+def test_proxy_debug_modes_never_route_gamejoin(mode: str) -> None:
+    proxy = proxy_master.ProxyMaster.__new__(proxy_master.ProxyMaster)
+    vars(proxy)['config_manager'] = type(
+        'Config',
+        (),
+        {'settings': {'_runtime_proxy_debug': True, '_runtime_proxy_debug_mode': mode}},
+    )()
+    desired = cast('Callable[[], set[str]]', getattr(proxy, '_desired_intercept_hosts'))
+    assert 'gamejoin.roblox.com' not in desired()
+
+
+def test_stale_host_detection_includes_unmarked_legacy_gamejoin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hosts_file = tmp_path / 'hosts'
+    hosts_file.write_text('127.0.0.1 localhost\n::1 gamejoin.roblox.com\n', encoding='utf-8')
+    monkeypatch.setattr(proxy_master, 'HOSTS_FILE', hosts_file)
+    assert proxy_master.has_stale_hosts_entries(set(proxy_master.INTERCEPT_HOSTS))

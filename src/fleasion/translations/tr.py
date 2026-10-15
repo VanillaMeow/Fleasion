@@ -677,6 +677,7 @@ TURKISH: dict[str, str] = {
     'proxy.table.status': 'Durum',
     'proxy.table.time': 'Zaman',
     'proxy.tunnel_note': 'Önizleme yok - bu bağlantı tünellendi (opak TLS), şifresi çözülmedi.',
+    'proxy.gamejoin_disabled': 'Roblox güncellemesinden sonra Gamejoin özellikleri devre dışı bırakıldı. Fleasion artık Gamejoin isteklerini yakalamıyor.',
     'proxy_gate.disabled_message': 'Proxy Ayarlar’da devre dışı olduğundan bu bölüm kapalı.',
     'rando.account.add_title': 'Hesap Ekle',
     'rando.account.change_cookie_title': 'Çerezi Değiştir',

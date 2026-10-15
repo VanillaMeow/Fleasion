@@ -677,6 +677,7 @@ PORTUGUESE: dict[str, str] = {
     'proxy.table.status': 'Status',
     'proxy.table.time': 'Tempo',
     'proxy.tunnel_note': 'Nenhuma pré-visualização disponível — esta conexão foi tunelada (TLS opaco), não descriptografada.',
+    'proxy.gamejoin_disabled': 'Os recursos de Gamejoin foram desativados após uma atualização do Roblox. O Fleasion não intercepta mais solicitações de Gamejoin.',
     'proxy_gate.disabled_message': 'Esta seção está fechada porque o proxy está desativado nas Configurações.',
     'rando.account.add_title': 'Adicionar conta',
     'rando.account.change_cookie_title': 'Alterar cookie',

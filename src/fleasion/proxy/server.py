@@ -82,13 +82,12 @@ CLIENT_SETTINGS_HOSTS: frozenset[str] = frozenset(
     {'clientsettingscdn.roblox.com', 'clientsettings.roblox.com'}
 )
 CDN_HOSTS: frozenset[str] = frozenset({'fts.rbxcdn.com', 'contentdelivery.roblox.com'})
-BASE_INTERCEPT_HOSTS: frozenset[str] = frozenset({ASSET_DELIVERY_HOST, GAMEJOIN_HOST, *CDN_HOSTS})
+BASE_INTERCEPT_HOSTS: frozenset[str] = frozenset({ASSET_DELIVERY_HOST, *CDN_HOSTS})
 USERNAME_SPOOFER_INTERCEPT_HOSTS: frozenset[str] = frozenset({PROFILE_API_HOST})
 CUSTOM_FFLAGS_INTERCEPT_HOSTS: frozenset[str] = CLIENT_SETTINGS_HOSTS
 INTERCEPT_HOSTS: frozenset[str] = (
     BASE_INTERCEPT_HOSTS | USERNAME_SPOOFER_INTERCEPT_HOSTS | CUSTOM_FFLAGS_INTERCEPT_HOSTS
 )
-ASSET_TRAFFIC_MISSING_DIAGNOSTIC_SECONDS = 20.0
 UPSTREAM_ENDPOINT_REFRESH_COOLDOWN_SECONDS = 5.0
 UPSTREAM_ENDPOINT_REFRESH_RETRY_TIMEOUT = 3.0
 # Temporary Windows compatibility cap for the TLS endpoint that Roblox talks
@@ -118,7 +117,6 @@ _RESOLVE_PENDING_ATTR = '_resolve_pending'
 _DETECT_REPL_RIG_ATTR = '_detect_repl_rig'
 _GET_CONVERTED_CURVE_ATTR = '_get_or_create_converted_curve'
 _GET_CONVERTED_ATTR = '_get_or_create_converted'
-_GET_MODIFIED_FIRST_LINE_ATTR = '_get_modified_first_line'
 _LOG_BUFFER_ATTR = 'log_buffer'
 _OBJ_CONVERTER_ATTR = 'get_or_create_mesh_from_obj'
 _GENERATE_HOST_CERT_ATTR = 'generate_host_cert'
@@ -353,11 +351,6 @@ def _texture_get_converted(
         'Callable[[str, str], str | None]', getattr(texture_stripper, _GET_CONVERTED_ATTR)
     )
     return converter(repl_path, target_rig)
-
-
-def _flow_request_modified_first_line(request: _FlowRequest, original: bytes) -> bytes:
-    getter = cast('Callable[[bytes], bytes]', getattr(request, _GET_MODIFIED_FIRST_LINE_ATTR))
-    return getter(original)
 
 
 @dataclass
@@ -1640,10 +1633,6 @@ class FleasionProxy:
         self._intercept_match_text = ''
         self._pending_lock = threading.Lock()
         self._pending: dict[tuple[int, str], PendingIntercept] = {}
-        self._last_gamejoin_time: float = 0.0
-        self._last_asset_traffic_time: float = 0.0
-        self._asset_diag_generation: int = 0
-        self._asset_diag_tasks: set[asyncio.Task[None]] = set()
         self._on_upstream_connect_failure = on_upstream_connect_failure
         self._upstream_connect_failure_notified = False
         self._upstream_endpoint_refresher = upstream_endpoint_refresher
@@ -1738,8 +1727,8 @@ class FleasionProxy:
         server_name: str | None,
         _initial_ctx: ssl.SSLSocket,
     ) -> None:
-        name = (server_name or '').lower()
-        if name in self._intercept_excluded_hosts:
+        name = (server_name or '').lower().rstrip('.')
+        if name == GAMEJOIN_HOST or name in self._intercept_excluded_hosts:
             self._log_sni_once(
                 f'excluded:{name}',
                 f'SNI {name} is excluded from interception; using tunnel passthrough',
@@ -1776,6 +1765,8 @@ class FleasionProxy:
         weren't pre-provisioned for, so intercept-all mode can TLS-terminate
         literally anything Roblox connects to, not just the fixed feature set.
         """
+        if host.strip().lower().rstrip('.') == GAMEJOIN_HOST:
+            return None
         if self._ca_cert_path is None or self._ca_key_path is None or self._cert_cache_dir is None:
             return None
         try:
@@ -1830,7 +1821,7 @@ class FleasionProxy:
         await asyncio.gather(*(server.serve_forever() for server in self._servers))
 
     def set_module_interceptors(self, interceptors: Iterable[_ModuleInterceptor]) -> None:
-        """Set the list of module interceptors for gamejoin traffic hooks."""
+        """Set the list of module interceptors for profile response hooks."""
         self._module_interceptors = list(interceptors)
 
     def set_upstream_endpoints(
@@ -1918,7 +1909,10 @@ class FleasionProxy:
         entry = None
         with self._request_log_lock:
             for candidate in self._request_log:
-                if candidate['id'] == entry_id:
+                if (
+                    candidate['id'] == entry_id
+                    and host.strip().lower().rstrip('.') != GAMEJOIN_HOST
+                ):
                     entry = candidate
                     break
         if entry is None:
@@ -2003,6 +1997,7 @@ class FleasionProxy:
         normalized_host = (host or '').strip().lower().rstrip('.')
         return (
             port == 443
+            and normalized_host != GAMEJOIN_HOST
             and normalized_host not in self._intercept_excluded_hosts
             and (self._intercept_all_hosts or normalized_host in self._intercept_hosts)
         )
@@ -2143,33 +2138,6 @@ class FleasionProxy:
     def loopback_ips_for_hosts(self) -> tuple[str, ...]:
         ordered: list[str] = [ip for ip in ('127.0.0.1', '::1') if ip in self._listening_loopbacks]
         return tuple(ordered) or ('127.0.0.1',)
-
-    def _note_asset_traffic(self) -> None:
-        self._last_asset_traffic_time = time.monotonic()
-
-    def _note_gamejoin_traffic(self) -> None:
-        self._last_gamejoin_time = time.monotonic()
-        self._asset_diag_generation += 1
-        generation = self._asset_diag_generation
-        task = asyncio.create_task(
-            self._warn_if_asset_traffic_missing(generation, self._last_gamejoin_time)
-        )
-        self._asset_diag_tasks.add(task)
-        task.add_done_callback(self._asset_diag_tasks.discard)
-
-    async def _warn_if_asset_traffic_missing(self, generation: int, gamejoin_time: float) -> None:
-        await asyncio.sleep(ASSET_TRAFFIC_MISSING_DIAGNOSTIC_SECONDS)
-        if generation != self._asset_diag_generation:
-            return
-        if self._last_asset_traffic_time >= gamejoin_time:
-            return
-        _best_effort_log(
-            'ProxyDiag',
-            'Game join traffic was intercepted, but no assetdelivery/CDN requests reached Fleasion '
-            f'within {ASSET_TRAFFIC_MISSING_DIAGNOSTIC_SECONDS:.0f}s. '
-            'Possible asset traffic bypass: IPv6 loopback, stale DNS cache, hosts-file protection, '
-            'or security/VPN filtering.',
-        )
 
     def _endpoints_for_host(
         self,
@@ -2841,55 +2809,6 @@ class FleasionProxy:
             # 'solid', 'solid_v3', and 'anim_rig' need the upstream response.
             return short_circuit, False, True
 
-        async def forward_gamejoin_request(
-            path: str,
-            req_raw: RawHeaders,
-            req_body: RawBody,
-            req_body_raw: bytes,
-        ) -> tuple[ProxyFlow | None, str]:
-            req_first, req_headers = req_raw.first_line, req_raw.headers
-            req_body_plain = _decompress_body(req_body_raw, req_headers)
-            if not self._module_interceptors:
-                if not await ensure_upstream(path):
-                    return None, 'break'
-                if self._wire_preserving_passthrough:
-                    outgoing = req_raw.raw_header_block + req_body.wire
-                else:
-                    outgoing = _reassemble_raw_request(req_first, req_headers, req_body_raw)
-                cast('asyncio.StreamWriter', up_writer).write(outgoing)
-                return None, 'sent'
-
-            gamejoin_flow = ProxyFlow(req_first, req_headers, req_body_plain, host)
-            for interceptor in list(self._module_interceptors):
-                _call_module_interceptor(interceptor, gamejoin_flow, response=False)
-            if gamejoin_flow.drop_request:
-                drop_body = gamejoin_flow.drop_body
-                if isinstance(drop_body, str):
-                    drop_body = drop_body.encode('utf-8', errors='replace')
-                response_writer.write(
-                    _make_local_response(gamejoin_flow.drop_status_code, drop_body)
-                )
-                await response_writer.drain()
-                action = 'continue' if _keep_alive(req_first, req_headers) else 'break'
-                return gamejoin_flow, action
-
-            new_first = _flow_request_modified_first_line(gamejoin_flow.request, req_first)
-            new_body = gamejoin_flow.request.raw_content
-            if not await ensure_upstream(path):
-                return gamejoin_flow, 'break'
-            if new_first != req_first or new_body != req_body_plain:
-                outgoing = _build_modified_request(
-                    new_first,
-                    gamejoin_flow.request.headers.to_bytes_dict(),
-                    new_body,
-                )
-            elif self._wire_preserving_passthrough:
-                outgoing = req_raw.raw_header_block + req_body.wire
-            else:
-                outgoing = _reassemble_raw_request(req_first, req_headers, req_body_raw)
-            cast('asyncio.StreamWriter', up_writer).write(outgoing)
-            return gamejoin_flow, 'sent'
-
         def pick_rig_matched_file(
             orig_bytes: bytes,
             repl_path: str,
@@ -3025,7 +2944,7 @@ class FleasionProxy:
                 # machinery, which only makes sense on a visible row) is
                 # gated by the "log/intercept all APIs" toggle - including
                 # for Fleasion's own feature hosts. The feature processing
-                # itself (texture stripper, custom FastFlags, gamejoin, etc.)
+                # itself (texture stripper, custom FastFlags, etc.)
                 # further down in this function doesn't depend on
                 # _log_entry, so it keeps working either way.
                 log_entry = (
@@ -3132,7 +3051,6 @@ class FleasionProxy:
                 bypass_custom_fflags = (
                     req_headers.get(_BROWSER_BYPASS_CUSTOM_FFLAGS_HEADER, b'').strip() == b'1'
                 )
-                gamejoin_flow: ProxyFlow | None = None
                 profile_flow: ProxyFlow | None = None
                 upstream_req_first = req_first
                 upstream_req_headers = (
@@ -3155,9 +3073,6 @@ class FleasionProxy:
                 )
                 if custom_fflag_request_enabled and custom_fflag_modifier.requires_fresh_response():
                     upstream_req_headers = _without_conditional_client_settings_headers(req_headers)
-
-                if host == ASSET_DELIVERY_HOST or host in CDN_HOSTS:
-                    self._note_asset_traffic()
 
                 # ── TextureStripper: CDN short-circuit (replace before upstream) ──
                 (
@@ -3204,15 +3119,6 @@ class FleasionProxy:
                     cast('asyncio.StreamWriter', up_writer).write(
                         _build_modified_request(req_first, req_headers, req_body_modified)
                     )
-                elif host == GAMEJOIN_HOST:
-                    # Module interceptors may modify or locally drop gamejoin requests.
-                    gamejoin_flow, gamejoin_action = await forward_gamejoin_request(
-                        path, req_raw, req_body, req_body_raw
-                    )
-                    if gamejoin_action == 'break':
-                        break
-                    if gamejoin_action == 'continue':
-                        continue
                 elif (
                     host == PROFILE_API_HOST
                     and PROFILE_API_PATH_FRAGMENT in path
@@ -3282,8 +3188,6 @@ class FleasionProxy:
                         f'ClientSettings upstream returned HTTP {status_code} with an empty body; '
                         'response left unchanged',
                     )
-                if host == GAMEJOIN_HOST and 200 <= status_code < 400:
-                    self._note_gamejoin_traffic()
                 if status_code in {400, 429} and host in {
                     ASSET_DELIVERY_HOST,
                     *CDN_HOSTS,
@@ -3302,7 +3206,6 @@ class FleasionProxy:
                     )
                 elif status_code >= 400 and host in {
                     ASSET_DELIVERY_HOST,
-                    GAMEJOIN_HOST,
                     *CDN_HOSTS,
                 }:
                     ct = resp_headers.get(b'content-type', b'').decode('ascii', errors='replace')
@@ -3377,22 +3280,6 @@ class FleasionProxy:
                     ) = await modify_custom_fflag_response(path, resp_headers, resp_body_raw)
 
                 if (
-                    host == GAMEJOIN_HOST
-                    and gamejoin_flow is not None
-                    and self._module_interceptors
-                ):
-                    resp_body_plain_ = _decompress_body(resp_body_raw, resp_headers)
-                    gamejoin_flow.response = _FlowResponse(resp_first, resp_body_plain_)
-                    for interceptor in list(self._module_interceptors):
-                        _call_module_interceptor(interceptor, gamejoin_flow, response=True)
-                    gamejoin_response = _flow_response_after_callbacks(gamejoin_flow)
-                    if (
-                        gamejoin_response is not None
-                        and gamejoin_response.content != resp_body_plain_
-                    ):
-                        resp_body_raw = gamejoin_response.content
-                        response_modified = True
-                elif (
                     host == PROFILE_API_HOST
                     and profile_flow is not None
                     and self._module_interceptors

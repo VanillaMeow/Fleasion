@@ -677,6 +677,7 @@ VIETNAMESE: dict[str, str] = {
     'proxy.table.status': 'Trạng thái',
     'proxy.table.time': 'Thời gian',
     'proxy.tunnel_note': 'Không thể xem trước — kết nối này được chuyển qua đường hầm TLS mà không giải mã.',
+    'proxy.gamejoin_disabled': 'Các tính năng Gamejoin đã bị tắt sau một bản cập nhật Roblox. Fleasion không còn chặn các yêu cầu Gamejoin.',
     'proxy_gate.disabled_message': 'Mục này không khả dụng vì proxy đã được tắt trong Cài đặt.',
     'rando.account.add_title': 'Thêm tài khoản',
     'rando.account.change_cookie_title': 'Đổi cookie',
