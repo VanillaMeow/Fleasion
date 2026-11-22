@@ -1,0 +1,120 @@
+# Temporary: checks that the macOS package starts on macOS 14 and 15 after
+# PySide6 6.12's binding modules had their declared minimum lowered to 14.4
+name: macOS Launch Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Build PyInstaller Packages run whose macOS package to test
+        required: true
+        default: '44971407542'
+  push:
+    branches:
+      - ci/macos-launch-test
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  launch:
+    name: Launch on ${{ matrix.os }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15]
+        arch: [arm64, x86_64]
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_ID: ${{ inputs.run_id || '44971407542' }}
+    steps:
+      - name: Show the runner
+        run: |
+          sw_vers
+          uname -m
+
+      - name: Install Rosetta
+        if: matrix.arch == 'x86_64'
+        run: softwareupdate --install-rosetta --agree-to-license
+
+      # The build uploads the release zip itself (archive: false). ditto keeps
+      # the framework symlinks and permissions that a generic unzip would lose
+      - name: Download the macOS package
+        run: |
+          artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.name | endswith("-MacOS-Universal.zip")) | .id' | head -n 1)"
+          test -n "$artifact_id"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > package.zip
+
+          # Unwrap the package if the artifact store zipped it once more
+          entries="$(unzip -Z1 package.zip)"
+          if [ "$(printf '%s\n' "$entries" | wc -l | tr -d ' ')" = 1 ] && [[ "$entries" == *.zip ]]; then
+            unzip -q package.zip -d wrapped
+            mv "wrapped/$entries" package.zip
+          fi
+
+          mkdir app
+          ditto -x -k package.zip app
+          ls app
+
+      - name: Show declared minimums
+        run: |
+          app="$(find "$PWD/app" -maxdepth 1 -name '*.app' | head -n 1)"
+          for binary in \
+            "$app/Contents/Frameworks/PySide6/QtWidgets.abi3.so" \
+            "$app"/Contents/Frameworks/shiboken6/libshiboken6.abi3.*.dylib \
+            "$app/Contents/Frameworks/PySide6/Qt/lib/QtCore.framework/Versions/A/QtCore"; do
+            echo "$binary"
+            otool -arch "${{ matrix.arch }}" -l "$binary" | grep -A4 LC_BUILD_VERSION | grep -E 'minos|sdk'
+          done
+
+      - name: Launch the app
+        run: |
+          app="$(find "$PWD/app" -maxdepth 1 -name '*.app' | head -n 1)"
+          executable="$app/Contents/MacOS/$(defaults read "$app/Contents/Info" CFBundleExecutable)"
+          arch "-${{ matrix.arch }}" "$executable" > launch.log 2>&1 &
+          pid=$!
+
+          # Importing the app core loads every PySide6 binding module, so a
+          # library dyld refuses to load ends the process within seconds
+          for _ in $(seq 60); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 1
+          done
+
+          status=running
+          if kill -0 "$pid" 2>/dev/null; then
+            lsof -p "$pid" | grep -E 'abi3\.(so|[0-9.]+dylib)|QtCore\.framework' > loaded.txt || true
+            kill "$pid"
+            sleep 3
+            kill -9 "$pid" 2>/dev/null || true
+          else
+            code=0
+            wait "$pid" || code=$?
+            status="exited with code $code"
+          fi
+
+          echo "::group::Launch log"
+          cat launch.log
+          echo "::endgroup::"
+          echo "Process status after 60 s: $status"
+
+          if [ "$status" != running ]; then
+            echo "::error::Fleasion did not stay running ($status)"
+            exit 1
+          fi
+          if grep -E 'Traceback|dyld|Symbol not found|Library not loaded|ImportError' launch.log; then
+            echo "::error::The launch log reports a load failure"
+            exit 1
+          fi
+
+          echo "Loaded PySide6 and shiboken6 libraries:"
+          cat loaded.txt
+          for library in QtWidgets.abi3.so QtGui.abi3.so QtCore.abi3.so libshiboken6.abi3; do
+            if ! grep -q "$library" loaded.txt; then
+              echo "::error::$library was not loaded by the running app"
+              exit 1
+            fi
+          done
